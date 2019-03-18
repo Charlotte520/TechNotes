@@ -1,0 +1,16 @@
+1. DNS
+domain name -> ip1,ip2...  =》DNS和client cache，导致机器故障后仍然请求原ip。
+
+2. LVS 
+1) NAT
+LB提供对外IP和对内IP，将请求转发到server S1,S2,S3，其网关为LB的对内ip。发送请求时，client的目的地址用LB的对外ip:port；LB修改为S1 ip:port。响应时，LB将源地址改为LB的对外ip:port。
+数据流：client -> lb -> server -> lb -> client。
+策略：轮询；加权轮询；最少连接；加权最少连接等。
+请求分成多个数据包，如何保证发到同一server？ LB维护表，记录 client pkg -> server，面向连接的四层LB。 七层LB：取http报文，根据url、browser、lang等转发。
+缺点：所有流量都要经过LB，要修改request和response。且通常request报文短，response长，加剧LB修改数据包的工作。
+2) DR
+将req、res分开处理，LB只处理req，server直接response给client。 client -> lb -> server -> client
+所有机器ip相同，将lookback都绑定到vip，除lb外其他机器抑制ARP响应。请求的ip包通过链路层发过来时，用ARP协议广播vip，只有lb处理该报文。lb选择server，目标ip:port不变，修改目的mac地址。server可用vip直接响应给client。
+
+
+
