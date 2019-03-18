@@ -1,0 +1,9 @@
+1. gossip
+一传十，十传百
+
+redis, cassandra, amazon s3, bit torrent
+问题：如何分布式数据达到一致状态？ 
+简单方案：数据先存到server x，其他a、b、c等定期到x上pull。 =》x挂掉怎么办？ 由于网络原因，a连不上x怎么办？
+gossip：x随机选#fanout个相邻节点发消息，如给a、b、c、d。a-d再分别随机选#f个相邻节点继续转发。经过log(#node)，base #fanout次，所有节点一致。也可以pull，或push-pull结合。
+优点：传播快，可伸缩，多路径=》容错性强，去中心化。
+缺点：延迟；冗余。
