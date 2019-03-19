@@ -1,0 +1,42 @@
+16. crontab
+仅执行一次：/etc/init.d/atd restart  开机启动用chkconfig atd on
+生成job：at [-mldv] TIME，job写入/var/spool/at/目录，等atd执行。用/etc/at.allow, at.deny限制可执行at命令的用户。atq查询job；atrm jobid 删除。 batch命令，cpu load<0.8时才执行job。load：cpu单一时间点负责的工作数量。
+
+循环执行：crond 每分钟读取一次/etc/crontab和/var/spool/cron/
+生成job：crontab [-u username] [-l|e|r]， 写入/var/spool/cron/目录。-e进入vi编辑界面。
+系统配置：/etc/crontab，修改后重启crond。
+
+唤醒停机期间的job：anacron，读取timestamps文件，分析与当前时间之差，若有diff，执行crontab。
+anacron的运行时间：开机期间；写入crontab调度。
+
+20. log
+daemon进程：syslogd, klogd, logrotate
+
+syslog配置：/etc/syslog.conf:   
+serviceName[.=!]loglevel  path  
+默认服务有：cron, mail, daemon, news, syslog等，app可调用这些服务记录log。
+loglevel有： none、info、notice、warning、err、crit、alert、emerg。
+path：filepath、打印机、@ip、usernname、* 在线的所有人
+配log server，其他host将log都传到server：修改server的config：SYSLOGD_OPTIONS="-m 0 -r"； 重启：/etc/init.d/syslog restart; 查看端口netstat -lunp | grep syslog, 默认udp：514。  client配：*.* @serverip 重启。
+
+路径：/var/log/   : 记录 日期时间；主机名；服务名/函数名；实际数据。
+chattr +a /var/log/syslog： append only，不可删除、修改等。
+
+logrotate配置：/etc/logrotate.conf 默认值; /etc/logrotate.d/ 详细设置。
+/var/log/syslog {
+  weekly
+  rotate 4
+  create 
+  compress
+  sharedscripts
+  prerotate
+    /user/bin/chattr -a /var/log/syslog
+  endscript
+  sharedscprits
+    /bin/kill -HUP syslogd
+    /user/bin/chattr +a /var/log/syslog
+  postrotate
+  endscript
+}
+将logrotate加入crontab定期执行。测试：logrotate [-vf] /etc/logrotate.conf
+
