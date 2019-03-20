@@ -9,6 +9,18 @@
 唤醒停机期间的job：anacron，读取timestamps文件，分析与当前时间之差，若有diff，执行crontab。
 anacron的运行时间：开机期间；写入crontab调度。
 
+17. 程序管理 & selinux
+program：二进制程序存放在存储介质，物理文件； process：触发程序后，执行者的权限与属性、code、data等加载到内存，os分配pid，正在运行中的程序。父子进程用ppid关联。
+fork-exec: 父进程pid为x，程序为zzz，fork后，产生完全相同的临时进程，pid为y，ppid为x，程序为zzz。再exec执行目标进程，pid为y，ppid为x，程序为qqq。
+
+bash环境下的job control：登录取得bash后，在单个tty下同时运行多个job。执行命令的环境为foreground工作；自行运行的为background job，不能ctrl-c，不能等shell input。
+直接丢到bg运行：cmd &。前台丢到后台：ctrl-z，状态为stopped，再用jobs查看jobid，bg %id即可run。bg到fg：fg %id。结束后台：kill -l(1 reload；2 ctrl-c；9 强制删除；15 正常结束)。
+远程连接到主机，运行bg job，脱机后会中断。用nohup cmd在前台运行，nohup cmd & 在后台运行，脱机不中断。
+
+查看某时间点的进程：ps aux | grep "name" 查看系统所有进程；  ps -l 查看自己bash相关的进程。stat：running、sleep（idle但可以被signal唤醒）、d（不可被唤醒的睡眠状态，如等io）、t（stop）、zombie（已终止但无法移出mem，交给init，若过段时间系统仍无法处理，reboot）
+查看动态的进程：top -d num，每num秒更新一次。  top [-bnp] ： b批次执行，和n搭配，指定输出次数，可将结果重定向到文件。p指定pid。
+pstree：进程树。
+
 20. log
 daemon进程：syslogd, klogd, logrotate
 
