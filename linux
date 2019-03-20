@@ -21,6 +21,17 @@ bash环境下的job control：登录取得bash后，在单个tty下同时运行�
 查看动态的进程：top -d num，每num秒更新一次。  top [-bnp] ： b批次执行，和n搭配，指定输出次数，可将结果重定向到文件。p指定pid。
 pstree：进程树。
 
+进程调度：priority+nice。priority是内核动态确定的，nice可修改，-20~19。执行新命令：nice [-n num] cmd。进程调整：renice [num] pid。nice可父子传递。
+
+查看内存：free [-b|k|m|g] [-t]  swap used最好不超过20%
+查看内核：uname -a
+系统启动时间和工作负载：uptime
+网络：netstat -[atunlp] : a all; t tcp; u udp; n 端口号；l 服务名；p pid。
+内核产生的信息，记录到内存的某保护段：dmesg | more。
+系统资源变化（cpu、mem、disk io）：vmstat
+
+
+
 20. log
 daemon进程：syslogd, klogd, logrotate
 
