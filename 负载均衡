@@ -12,5 +12,12 @@ LB提供对外IP和对内IP，将请求转发到server S1,S2,S3，其网关为LB
 将req、res分开处理，LB只处理req，server直接response给client。 client -> lb -> server -> client
 所有机器ip相同，将lookback都绑定到vip，除lb外其他机器抑制ARP响应。请求的ip包通过链路层发过来时，用ARP协议广播vip，只有lb处理该报文。lb选择server，目标ip:port不变，修改目的mac地址。server可用vip直接响应给client。
 
+3. 单点失败 -》双机热备
+vip对外提供服务。一个网卡可设置多个地址，如linux eth0网卡1,可以绑定一个ip，再绑定一个ip alias: eth0:1 -> vip。若master，绑定vip；若backup，不绑定。
+backup如何知道master挂掉？master给backup发心跳（广播），backup在特定时间内没收到，则绑定vip。若原master再活过来，可为每台机器定义priority，允许抢占时，根据priority抢master。
+每个lb的状态转换：init -> master -> backup。
+client还需要通过arp查询，vip机器对应的mac地址，所以还需绑定虚拟mac。
+
+
 
 
