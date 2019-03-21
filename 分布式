@@ -1,0 +1,25 @@
+1. 数据一致性：
+1) gossip
+一传十，十传百
+
+redis, cassandra, amazon s3, bit torrent
+问题：如何分布式数据达到一致状态？ 
+简单方案：数据先存到server x，其他a、b、c等定期到x上pull。 =》x挂掉怎么办？ 由于网络原因，a连不上x怎么办？
+gossip：x随机选#fanout个相邻节点发消息，如给a、b、c、d。a-d再分别随机选#f个相邻节点继续转发。经过log(#node)，base #fanout次，所有节点一致。也可以pull，或push-pull结合。
+优点：传播快，可伸缩，多路径=》容错性强，去中心化。
+缺点：延迟；冗余。
+
+2) raft：类paxos
+如何选leader？每个节点都有一个timer，初始为0。分配一个随机的election timeout（等待时间），结束后发起竞选。
+如a(10ms),b(15ms),c(20ms)，a先发起竞选，增加自己的term，给自己投票，发请求给b、c。bc重置自己的timer为0，同意a的请求。当a投票数过半后成为leader，维持与bc的心跳。bc每次收到心跳，timer都重置为0.
+a挂掉，若bc同时发起竞选，每个节点投票计数都为1：重置随机等待时间，重试。
+如何复制数据？每个节点都有一个日志队列。client发写请求到a，a记录到log（未提交）。a将数据发给bc，bc记录到log（未提交），告诉a已经记录。a收到半数响应，提交数据，响应client，并通知bc已提交。bc提交数据。若b失联，a不断重试，若重新开始工作，从a复制数据。
+
+a commit，挂掉，其他节点没有commit，怎么办？独立线程补偿。 a 挂掉，还没选出新的leader，client请求怎么办？重试。
+
+2.zk
+树形结构数据可在多机器间可靠复制，达到一致性。
+session：client和zk建立连接，定期发心跳，超时收不到则结束session。
+znode：树中每个节点，有永久（主动删除）、临时（session结束删除）、顺序（可实现分布式锁）。
+watch：client可监听znode，有变化（delete、update）则收到通知。
+
