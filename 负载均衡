@@ -17,7 +17,7 @@ vip对外提供服务。一个网卡可设置多个地址，如linux eth0网卡1
 backup如何知道master挂掉？master给backup发心跳（广播），backup在特定时间内没收到，则绑定vip。若原master再活过来，可为每台机器定义priority，允许抢占时，根据priority抢master。
 每个lb的状态转换：init -> master -> backup。
 client还需要通过arp查询，vip机器对应的mac地址，所以还需绑定虚拟mac。
-
+只有master工作导致浪费：两台LB都做master，为不同业务LB，且设置为对方的slave，可靠且不浪费。互为主备。
 
 
 
