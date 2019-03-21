@@ -29,6 +29,17 @@ pstree：进程树。
 网络：netstat -[atunlp] : a all; t tcp; u udp; n 端口号；l 服务名；p pid。
 内核产生的信息，记录到内存的某保护段：dmesg | more。
 系统资源变化（cpu、mem、disk io）：vmstat
+/proc/*：进程在内存中，内存的数据写入/proc/目录，每个pid一个目录。
+通过文件找正在使用该文件的进程：fuser [-umv] [-k [i] [-signal]] file/dir
+查看进程打开的文件：lsof [-aUu] [+d]
+根据程序名找pid：pidof [-sx] name
+
+18. 系统服务daemons
+可独立启动的daemon：加载到内存后一直占用资源，eg httpd, vsftpd。通过super daemon(xinetd)唤起的daemon：有client请求时，xinetd触发进程加载到内存，eg telnet。super daemon可multi thread，或single thread处理请求。
+daemon工作形态：signal-control，有client请求时立即处理，eg 打印机cupsd。interval control，隔断时间执行，eg crond。
+启动脚本：环境检测、conf分析、pid文件放置、lock重要交换文件。/etc/init.d/*：系统服务的script。/etc/sysconfig/*：系统服务的初始化配置。/etc/xinetd.config：super daemon的配置，他管理的daemon配置在/etc/xinet.d/*。/etc/*：各服务的config。/var/lib/*：服务产生的数据库。/var/run/*：服务记录pid。
+启动方式：/etc/init.d/script；  services name (start|stop|restart|..)，通过/sbin/service程序启动。
+
 
 
 
