@@ -1,3 +1,12 @@
+10.vim
+一般模式：移动光标，删除，复制，粘贴。i/o/a/r进入编辑模式。:/?进入命令行模式：查找、读取、保存、替换等。
+30->：向右移动30个字符。G：文件最后一行。gg：第一行。nG：第n行。:n1,n2s/word1/word2/gc: 在n1到n2行之间找word1,并替换为word2. nx：向后删除n个字符。dd：删一行。ndd：删n行。yy：复制一行。nyy。p：paste。u：复原前一个操作。ctrl-r：重做。.：重复前一个操作。:n1,n2 w [filename]：数据写入新文件。:r [filename]: 读入新文件。：sp：多窗口。
+f.swap：暂存对f的操作，用于恢复。vim正常退出时删除。
+ctrl-v：visual block，光标移动的地方反白，可复制、删除等。
+环境配置：~/.vimrc。记录操作：~/.viminfo
+
+11. bash
+
 16. crontab
 仅执行一次：/etc/init.d/atd restart  开机启动用chkconfig atd on
 生成job：at [-mldv] TIME，job写入/var/spool/at/目录，等atd执行。用/etc/at.allow, at.deny限制可执行at命令的用户。atq查询job；atrm jobid 删除。 batch命令，cpu load<0.8时才执行job。load：cpu单一时间点负责的工作数量。
@@ -39,7 +48,7 @@ pstree：进程树。
 daemon工作形态：signal-control，有client请求时立即处理，eg 打印机cupsd。interval control，隔断时间执行，eg crond。
 启动脚本：环境检测、conf分析、pid文件放置、lock重要交换文件。/etc/init.d/*：系统服务的script。/etc/sysconfig/*：系统服务的初始化配置。/etc/xinetd.config：super daemon的配置，他管理的daemon配置在/etc/xinet.d/*。/etc/*：各服务的config。/var/lib/*：服务产生的数据库。/var/run/*：服务记录pid。
 启动方式：/etc/init.d/script；  services name (start|stop|restart|..)，通过/sbin/service程序启动。
-
+开机启动：chkconfig --list serviceName：检查是否开机启动；chkconfig [--level [012345]] [serviceName] [on|off]
 
 
 
