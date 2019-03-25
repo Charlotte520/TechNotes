@@ -33,10 +33,67 @@ restful url：面向资源。get /books; get /books/1; post /books; put /books/1
 为什么要三次握手？确认双方都能双工通信。a先发给b（1），b回复a(2），b可确认a能发且b能收。a收到b的回复，可确认a能发且收，且b能收发。a再发给b（3）,b收到后确认a能收且b能发。
 虚电路：建立虚拟连接，所有消息从同一通道发送。不发消息时，通道闲置。=》分组交换：不需要建立真正的连接通道，每个pkg的通道可能不一样，完全由中间节点确定下一路径。中间节点不保证可靠连接，消息可能失序、重复、丢失，由两个端点保证可靠。
 可靠传输：数据编号；超时/失败重传；连续发送，窗口满暂停发，ack来移动窗口，继续发。回退N步协议：失败分组及其以后的全部重发。选择性重传：仅重传失败分组，其后的缓存。
+socket：ip不可靠的节点通信，tcp两主机进程间通过失败重传实现的可靠传输。socket是os在tcp/udp上提供的抽象，由内核实现三次握手、累计确认、分组缓存等，包括(client ip, client port, server ip, server port)
+client： 
+clientfd=socket(xx);
+connect(clientfd, serverip, serverport,xx); //os自动获取client ip，分配port。实际对应三次握手
+send(clientfd, data);
+receive(clientfd,xx);
+close(clientfd);
 
-9. cpu
+server: 
+listenfd = socket(xx); //为监听端口而创建的socket描述符。(clientip:0.0.0.0, client port:*, serverip:192.168.0.1, server port:80)
+bind(listenfd, serverip, serverport,xx);//要求占用端口
+listen(listenfd,xx); //开始监听
+while(true) {
+  connfd = accept(listenfd,xx); //对应connect，完成三次握手。(clientip:192.168.1.1, client port:12368, serverip:192.168.0.1, server port:80)，可区分不同的client连接。
+  receive(connfd,xx);
+  send(connfd,xx);
+}
+
+
+9. cpu & 进程 & 线程
 批处理系统 =》多道程序：os将进程load到内存时修改内存地址（静态重定位）。内存紧缩时要移动进程=》动态重定位，需要记录每个进程的起始地址，并用专门的寄存器保存。 防止访问别的进程的内存地址 =》记录进程长度，判断是否越界。将寄存器、计算内存地址的方法，封装为MMU内存管理单元。
 程序局部性原理（时间，空间） =》 分块装载，先装载最重要的代码，再按需装载其他。 虚拟内存，os管理 虚拟页->物理页，最常访问的页表放到cache；物理页不存在时，产生缺页中断，os从disk取页。 =》程序分为代码段、数据段、堆栈段、共享段，os记录段的起始位置、长度、段保护位，段内分页管理。程序访问不属于自己的段，产生segment fault，被os kill，并生成core dump。
+进程：程序+PCB（PC、函数调用栈帧、栈顶（在EBP、ESP寄存器中），打开的文件句柄，程序段、数据段的地址，已用cpu时间、等待cpu时间等），根据pcb上下文切换。
+线程：带自动保存的文字处理，若用两进程实现：p1和用户交互，p2自动保存。但进程相互独立，地址空间独立、通信开销大。=》共享进程资源，如地址空间、全局变量、文件资源等，pc、寄存器、函数调用堆栈等独立。若在用户空间实现线程，os仅处理进程，某线程阻塞会导致整个进程阻塞，效率低。若内核实现线程，内核维护进程表、线程表，每次创建线程都经过os，慢。=》混合：用户空间的进程可创建用户线程，内核可创建内核线程，用户线程bind到内核线程。=》进程通信、线程同步等问题。
+
+10.网卡
+如何获取ip？应用层 DHCP广播：dhcp报文->udp报文：dst port：67,src port：68->ip报文：dst ip:255.255.255.255, src ip: 0.0.0.0 -> 以太网帧: dst: FF:FF:FF:FF:FF:FF, src：mymac。 DHCP server收到报文后分配一个内网ip 192.168.1.2。本机收到ip后，确认该ip，广播。dchp server再次确认该ip的分配，并返回网关ip，dns ip。
+dns访问：ARP广播。arp报文：dst：FF:FF:FF:FF:FF:FF, src：mymac。网关路由器返回mac。本机将消息发给网关，出局域网后由各路由器转发到dns server。
+NAT：ISP给网关一个外网ip：61.52.247.112，内网向外发数据时，网关将src ip/port改成外网ip:port2，并在nat表记录：外网ip:port2 -> 内网ip:port。返回数据改dst ip:port。
+Upnp：p2p网络中，主机主动要求网关建立nat映射，内网ip:port <-> 外网ip：port2，使主机作为一个电驴server，将外网连接请求转发到内网ip:port。
+
+11. 文件
+disk：柱面、磁头、扇区 -》逻辑块。 
+文件用到哪些磁盘块？连续记录：随机访问效率高，知道开头、长度、某地址，可立即定位。但删除后的碎片无法充分利用。链式：随机访问每次都得从第一块开始，效率低。索引式：专门有磁盘块存放文件属性、使用的磁盘块，inode。 目录也是inode，包括目录属性、存放目录内容的磁盘块号，磁盘块中放目录下的内容。
+删除文件：在目录中删除文件；释放inode到空闲节点池；释放磁盘块到空闲磁盘块池。 多步操作，某步骤出错，整个目录和文件就乱了 =》log：操作前，先记log到disk，操作完后再删除log项。要求：可redo的操作必须能重复执行，且不会带来破坏。
+空闲块管理：链表，每个磁盘块号32bit，5亿磁盘，需要2G磁盘。=》bitmap：每个磁盘块用一个bit表示，0/1。
+文件系统：MBR（master boot record）+各磁盘块分区。MBR中有boot loader引导程序、磁盘分区表。分区表记录每个分区的start pos，那个分区是active，有64B，每个item 16B，只能有4个分区，多于4时将其中一个设为扩展分区，在其中继续划分逻辑分区。每个分区有引导块、多个块组。系统找到分区start pos，加载分区的引导块（存本分区的os）。每个块组有磁盘块bitmap、inode bitmap、inode表和数据块。
+
+12. IO设备
+块设备：磁盘、cd-rom、u盘等，数据存储在固定大小的块中，每个块都有地址。字符设备：键盘、鼠标、打印机等，字符流，没有地址。设备挂到io总线，有io端口编号，并可映射到内存，使cpu像访问内存一样访问io设备。
+cpu向设备驱动器发指令，挂起进程，设备完成后，通过中断控制器发中断请求（优先级），cpu执行中断处理程序（上下文切换等），处理数据。异步、事件驱动。
+DMA：大量数据传输到内存。
+
+13. lock：共享变量
+自旋锁：进程运行时，检查lock是否为ture，若为false，无限循环，直到cpu时间到，不阻塞，进入ready状态，等下次调度接着抢lock。os提供的test_and_set(lock)，保证检测lock是否为true，并设置lock为true，为原子操作。锁住总线，多cpu也不会乱。 =》递归时会死锁，不能重新进入同一函数（不可重入）。
+reentrant lock：每次申请锁后，记录是谁申请的，用counter记录重入次数。下次持有锁的进程再申请时，counter+1。释放时，counter-1,直到0时释放锁。且若抢不到lock，不要无限循环，阻塞到等待队列（加是否公平的参数）。等待时间参数：申请时等x秒，得不到就放弃。
+多个线程都获得同一lock：Semaphore lock = new Semaphore(10);    线程调用lock.acquire()/release()
+读写分离：ReadWriteLock，ReentrantReadWriteLock。
+某线程等其他线程完成后再执行：CountDownLatch，某线程执行完counter-1,直到0时等待线程开始。
+多个线程互相等待，都ready时再开始：CyclicBarrier。
+synchronized：互斥锁，悲观锁。=> CAS：CompareAndSwap，不加锁。更新流程为：（1）从内存读value A；(2）B=A+1得到B；(3）用A和内存值比较，若相同则写入B，否则回到（1）。硬件指令CAS保证原子。但CAS需要频繁读写内存，适合简单类型数据，复杂结构应用悲观锁。
+AtomicInteger a = new AtomicInteger(10);
+while(true) {
+  int current = a.get();
+  int b = current+1;
+  if (c.compareAndSet(current,b)) {return b;}  //java通过JNI调用C实现的CAS，AtomicInteger里包括内存的值。
+}
+AtomicReference：比较复杂对象的引用是否被修改过。ABA问题：值先为a，改为b，再改为a =》每个AtomicReference对象加version，AtomicStampedReference
+
+
+
 
 
 
