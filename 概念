@@ -57,6 +57,7 @@ while(true) {
 程序局部性原理（时间，空间） =》 分块装载，先装载最重要的代码，再按需装载其他。 虚拟内存，os管理 虚拟页->物理页，最常访问的页表放到cache；物理页不存在时，产生缺页中断，os从disk取页。 =》程序分为代码段、数据段、堆栈段、共享段，os记录段的起始位置、长度、段保护位，段内分页管理。程序访问不属于自己的段，产生segment fault，被os kill，并生成core dump。
 进程：程序+PCB（PC、函数调用栈帧、栈顶（在EBP、ESP寄存器中），打开的文件句柄，程序段、数据段的地址，已用cpu时间、等待cpu时间等），根据pcb上下文切换。
 线程：带自动保存的文字处理，若用两进程实现：p1和用户交互，p2自动保存。但进程相互独立，地址空间独立、通信开销大。=》共享进程资源，如地址空间、全局变量、文件资源等，pc、寄存器、函数调用堆栈等独立。若在用户空间实现线程，os仅处理进程，某线程阻塞会导致整个进程阻塞，效率低。若内核实现线程，内核维护进程表、线程表，每次创建线程都经过os，慢。=》混合：用户空间的进程可创建用户线程，内核可创建内核线程，用户线程bind到内核线程。=》进程通信、线程同步等问题。
+fork()：两次返回，给父进程返回子进程pid，给子进程返回0，两个都从fork的下一行代码开始执行。子进程完全复制父进程的所有资源，包括代码、数据、堆、栈等。exec()：子进程装载新程序，替换代码段，重置堆、数据段、栈等。
 
 10.网卡
 如何获取ip？应用层 DHCP广播：dhcp报文->udp报文：dst port：67,src port：68->ip报文：dst ip:255.255.255.255, src ip: 0.0.0.0 -> 以太网帧: dst: FF:FF:FF:FF:FF:FF, src：mymac。 DHCP server收到报文后分配一个内网ip 192.168.1.2。本机收到ip后，确认该ip，广播。dchp server再次确认该ip的分配，并返回网关ip，dns ip。
@@ -79,7 +80,56 @@ DMA：大量数据传输到内存。
 13. lock：共享变量
 自旋锁：进程运行时，检查lock是否为ture，若为false，无限循环，直到cpu时间到，不阻塞，进入ready状态，等下次调度接着抢lock。os提供的test_and_set(lock)，保证检测lock是否为true，并设置lock为true，为原子操作。锁住总线，多cpu也不会乱。 =》递归时会死锁，不能重新进入同一函数（不可重入）。
 reentrant lock：每次申请锁后，记录是谁申请的，用counter记录重入次数。下次持有锁的进程再申请时，counter+1。释放时，counter-1,直到0时释放锁。且若抢不到lock，不要无限循环，阻塞到等待队列（加是否公平的参数）。等待时间参数：申请时等x秒，得不到就放弃。
-多个线程都获得同一lock：Semaphore lock = new Semaphore(10);    线程调用lock.acquire()/release()
+
+Semaphore:互斥/同步问题 内核实现wait,signal操作，保证原子。
+int s;
+wait(s){
+  while(s<=0) ; //忙等
+  s--;
+}
+signal(s){s++;}
+
+typedef struct {
+  int v;
+  struct process *list;
+} semaphore;
+wait(semaphore *s) {
+  s->v--;
+  if (s->v < 0) {
+    当前进程加到list；
+    block(); //阻塞放弃cpu
+  }
+}
+signal(semaphore *s) {
+  s->v++;
+  if (s->v <=0){
+    从list取出一个进程；
+    wakeup(p);
+  }
+}
+1) 互斥
+int lock = 1;
+wait(lock);
+signal(lock);
+2)消费者生产者同步问题
+int lock = 1; int empty = 10; int full = 0; 
+生产者：
+while(true) {
+  wait(empty);//empty<0时等待
+  wait(lock);//加锁操作队列
+  signal(lock);//释放锁
+  signal(full);//通知消费者
+}
+消费者：
+while(true) {
+  wait(full);
+  wait(lock);
+  signal(lock);
+  signal(empty);
+}
+java封装：多个线程都获得同一lock：Semaphore lock = new Semaphore(10);    线程调用lock.acquire()/release()
+生产消费：BlockingQueue
+
 读写分离：ReadWriteLock，ReentrantReadWriteLock。
 某线程等其他线程完成后再执行：CountDownLatch，某线程执行完counter-1,直到0时等待线程开始。
 多个线程互相等待，都ready时再开始：CyclicBarrier。
@@ -92,12 +142,30 @@ while(true) {
 }
 AtomicReference：比较复杂对象的引用是否被修改过。ABA问题：值先为a，改为b，再改为a =》每个AtomicReference对象加version，AtomicStampedReference
 
+14. db
+1)隔离级别
+丢失修改：AB进程写同一数据，A将B的数据覆盖了。=》写数据时加排他锁X，直到事务结束，读不加锁。能避免丢数据，但可读到没提交或回滚的内容。read uncommited。
+脏数据：进程A在进程B执行过程中读取数据，B再rollback，A读到脏数据。=》读数据时加共享锁S。若数据加X锁，则不能加S锁，若数据加S锁，则不能加X锁，但可以再加S锁，且S锁在读完数据后立即释放。read committed。
+无法重复读：由于S锁读完立即释放，A先加S锁读数据x，释放S锁。B加X锁修改数据为y。A再读x失败。=》S锁一直锁定，直到事务提交。repeatable read。默认。
+幻读：A先用X锁锁定age>18的行，修改。B插入age>18的行。A再次确认，会发现多一行。=》串行执行。Serializable。
+MVCC：读不用加锁，写加锁。隐藏列：事务id（每次开始新事务递增），回滚指针。ReadView：当前活跃事务列表；Tmin；Tmax。
+2)原子性 
+undo log：幂等，可以多次恢复。若看到提交/回滚T1,说明事务已结束，不需恢复。只看到开始，需要按原数据恢复，再加上[回滚事务T1]，下次不用再恢复。每次先将undo log从日志缓冲区写入磁盘，再将修改后的数据写入db文件。所有修改后的数据写入磁盘文件后，再写入[提交]到log文件。
+[开始事务T1]
+[事务T1,row 1原数据，value1]
+[事务T1,row 2原数据，value2]
+[提交事务T1]
 
+15. 输入网址到浏览器呈现内容
+输入网址，发udp包给dns server，得到ip。
+browser发http请求，建立tcp连接(本机ip，随机分配的本机port，server ip，固定server port，如80)。
+经过路由器转发，到达server端。web server：可用一个线程处理请求，同一时刻只能处理一个，性能差；每个请求分配一个进程/线程，连接太多时内存消耗大，切换开销大；复用IO，epoll监听所有连接，有数据可读时，用进程/线程处理（nginx）。判断：若是静态请求，读取本地文件，返回。若是动态请求，发给后端server（轮询、权重、ip_hash、fair）。app server（tomcat，rose容器）：可为每个请求分配一个线程（BIO）；若干线程处理所有请求（NIO）。将HttpRequest交给某个servlet，转换为框架的参数格式，转给某Controller。
+HttpResponse发给browser后，http1.1默认keep-alive，不关闭tcp连接。http1.0要看request header中有没有Connection：keep-alive。
+browser获取html页面后，对其中引用的其他资源js、css、图片等，建立tcp连接，并行下载。server发文件时，通过cache-control、expire说明过期时间。过期后，browser根据上次发的last-modified和etag询问server有没有修改，若返回304 not modified，可继续用cache，否则发新文件。
+browser将html变成dom tree，css变成css rule tree，生成render tree，计算每个元素的位置、大小、布局，用os api绘制。
 
-
-
-
-
+16.浮点数为什么不精确：
+10进制的小数，计算机内部无法用二进制小数精确表达，只能用1/2^n逼近。
 
 
 
