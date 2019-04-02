@@ -1,0 +1,14 @@
+1. 系统设计  服务+数据存储
+4s分析法：scenario(要设计哪些功能，设计有多牛 问：feature、dau、qps、#user、interface)；service（大系统拆成小服务）；storage（数据如何存/取：schema、sql、nosql）；scale（缺陷，可能遇到的问题：sharding、optimize、special case）
+通过dau算平均qps，峰值qps，读写比例。 =》qps=1k，1-2台web server（单点失败）；qps=1m，1k台集群。较好的情况：web server可支持1k qps；sql db可1k qps（若join、index query多，会更小）；nosql（cassandra）可10k；nosql（memcached）可1m。
+拆分系统：按数据性质。
+storage: 结构化信息 db（sql：user表；弱结构化信息，kv型用nosql：tweets、graph）；非结构化信息 file system（img、vedio）。
+
+1)news feed如何存取？
+pull model：post时，写一条db记录。查看时，获取N个好友的前100条tweets，再合并出前100条。N次DB read + N路归并（可忽略）。读慢。=》cache每个用户最近的timeline，读N次cache read。or cache每个用户的news feed，要归并N个好友在某时间点后新增的tweet。
+push model：每个用户建一个list存news feed；post时，将tweet推送到每个用户的news feed list。N次DB write，但可以异步写入。fanout太大：大v用pull。不活跃用户（按最近登录时间排序）。
+fb用pull；instagram：push+pull；twitter：pull；朋友圈：push。
+
+2. OOD
+SOLID原则：single responsibility；open close（open to extension, close to modification）；liskov substitution(任何子类可替换其基类)；dependency inversion（抽象不依赖具体实现）。         
+5C解题法：clarify(what, how)；core objects; 
