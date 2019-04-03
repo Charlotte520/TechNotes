@@ -298,10 +298,11 @@ C/S:client可以通过server收发邮件。server接收，存储，转发。send
 2) cookie+token：用户在系统1登录，server在cookie中写token(header+userid)，用hash+密钥生成签名作为token的一部分。用户用token访问系统2,server收到token，用hash+密钥算签名，若和token中签名不同，说明被篡改了。否则取出userid即可。要求不同子系统的密钥、hash算法一致，且userid相同。不需要保存session，只需要计算、验证，无状态。
 3) 认证中心cas：用户访问www.a.com/page1，若没有登录，302重定向到www.sso.com/login?redirect=www.a.com/page1。用户在认证中心登录，建立session，建立随机字符串ticket，重定向到www.a.com/page1?ticket=xxx，且cookie为ssoid=123,sso.com。用户访问page1，server用ticket到认证中心验证，获取userid、ptoken、ptlogout等信息，若有效则建立session，返回页面，cookie为sessionid=456,a.com。用户访问www.a.com/page2，带a.com的cookie，登录过。用户访问www.b.com/page3，重定向到sso.com，带ssoid的cookie。认证中心返回ticket=yyy，重定向到page3。page3再到sso验证ticket，有效则建立session。
 退出：a系统退出时，用ptoken通知sso退出。sso验证ptoken与本地一致，退出。再用ptlogout调用b系统的退出接口，双方一致时，b退出。
+开放平台oauth：第三方app来注册，分配appid、key。用户登录第三方app，跳转到本平台www.platform.com/xxx?appid=xx&return_uri=https:www.a.com/callback,输用户名/psw，认证后，跳转回app，https://www.a.com/callback#token=xxx,带token。app可带token，通过api访问平台数据。#为hash fragment，停留在browser，只有js能访问，且不会用http request发到别的server。但token是明文，可在浏览器历史/日志中找到，不安全 =》隐藏token：平台返回https://www.a.com/callback?code=xxx。app server将code、appid、app key发到平台，申请token，不经过browser。
 
 22.web安全
 XSS：在输入框输入js代码，提交则保存到server，下次展示页面时执行。=》cookie中加HttpOnly，禁止js读取cookie。server过滤输入，去掉<,>,或编码转义<变成&lt。
-CSRF：
+SQL注入：不拼接字符串，用预编译语句，绑定变量。  密码+随机数salt（单独列），用hash计算。salt固定，会有重放攻击 =》加验证码 captcha。browser：hash(psw,salt)->hash_psw1，再计算hash(hash_psw1,captcha)->hash_psw2，只将psw2发给server。server：验证captcha是否正确；根据userid从db获取hash_psw，hash(hash_psw,captcha)->hash_psw3，比较psw2和3是否相同。
 
 
 
