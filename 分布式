@@ -25,3 +25,25 @@ watch：client可监听znode，有变化（delete、update）则收到通知。
 
 3. cap
 网络节点无法通信时，数据复制相关的功能，要么选A（能提供但可能不一致），要么选C（不可用，但其他功能可以访问）。
+一致性：
+session：多web server间同步（占带宽，有延迟，内存有限）；存在client（每次http请求都要带session，占外网带宽，有安全隐患，大小受cookie限制）；nginx根据用户ip（4层）/业务属性（7层，uid）做hash（server重启会丢部分session，要重新登录，rehash要重分布）；后端存储到redis/db。
+db主从：读多写少，读写分离，冗余从库。主从延迟导致读旧数据：半同步（主从同步完再返回写成功，写延迟增大）；强制读主库（用cache提高读性能）；中间件（记录写的key，在时间窗内将对key的读请求路由到主库，其他的路由到从库）；将写的key记录到cache，设置超时时间，读时若key在cache读主库，否则从库。
+db双主：双向同步，冗余写库提高写性能。自增主键冲突导致同步失败：两库不同的初始值，相同的步长。全局id gen。shadow master：只有一个主库可写，两库有相同vip，主库挂掉时vip自动漂移到shadow。若先写到主1，挂掉，vip到主2,写丢失。=》监测器：定时监测主1是否可用，异常时delay x秒，等主2同步完再切换到主2。
+db主从与cache：写数据时，更新or淘汰cache？若计算复杂，更新代价高，直接淘汰，否则更新（减少miss）。先操作db or cache？先淘汰cache，再写db（有cache miss，但可避免不一致）。写数据时，先淘汰cache，尚未更新db时，有其他读请求将旧数据又读到cache；写到主库，但尚未同步到从库时，从库读旧数据读到cache。导致cache和db不一致，要cache淘汰两次：写db后，等1s（同步延时），再次淘汰cache。或根据binlog，异步第二次淘汰cache。或对同一id的数据访问串行化，hash(id)%#conn。
+db冗余：水平切分时，根据partitionkey可定位到库，但非partitionkey的查询要扫全库，用冗余表提高非partitionkey的查询效率。服务可同步双写两表（写慢）；异步双写（写表1，发到queue，或根据log，异步服务写入表2）。都有不一致问题：离线扫描工具，对比两表，补偿不一致。或根据log，增量扫描。或写db时，消息发到queue，订阅该msg的服务实时检测并补偿。
+消息时序：单聊（发送方发送顺序与接收方展示顺序一致），群聊（所有接收方展示顺序一致），支付（同一用户的请求在server执行顺序一致）。原因：分布式时钟不一致、多发送方、多接收方、网络传输、多线程。=》以client/server时序为准。server生成单调递增id。主从复制时,在主上单点序列化，再将操作序列发到所有从。单聊：发消息时加上本地时序。群聊：server生成全局递增id；同一群的消息发到同一server，局部递增id。
+事务：补偿事务，业务层逆向操作db（if/else多，补偿可能失败）。2pc：并行执行，统一提交（降低不一致的概率，conn占用时间长）。协调者+参与者。投票阶段：参与者通知协调者。提交阶段：协调者根据执行反馈发commit/rollback请求。
+可用性：99.99%，年停机8.76h  冗余/去单点+故障自动转移
+高并发：响应时间、吞吐量、qps、并发用户数等指标。scale up：硬件；架构（cache、异步化、无锁数据结构）。scale out。
+
+4. GFS，MapReduce、BigTable
+GFS：单点master（避免分布式锁），shadow-master，只存meta不存文件数据，不走数据流，client可缓存meta。chunk server：64M文件块（减少碎片），追加写，tcp长连接。可靠性：meta变更写log；master检测chunk server存活性；master加锁保证meta的修改是原子的，顺序性；用checksum保证数据正确。保证多chunk server数据一致：primary串行化所有写操作。读多写少，所有写成功才返回，读一个成功即可，W+R>N。
+MapReduce：分治。用户设置#M，#R。创建M+R+1个执行实例副本，1master+其他worker。输入数据分为M份，分配给map worker，执行map()，本地内存生成临时数据，用partition()将数据分成R份，周期性写本地磁盘，由master传到reduce worker。reducer从M个map读数据(基于ip尽可能近)，执行reduce()，结果输出。全部结束后，master唤醒用户程序，返回R个结果文件。master：存meta（可存磁盘，用shadow-master做高可用；master挂掉重新执行），监控状态。worker：master周期ping，超时重新执行其job。若重执行map，要通知reducer新的mapper。若重执行reducer，不用通知。要求job幂等。长尾worker：partition()不合理，导致reduce负载不均。worker机器磁盘、cpu等有问题：备用worker，某些worker执行时间超预期，启动另一个worker执行相同job。
+分层架构：cpu固定，数据移动。下层封装获取数据的细节，上层更高效地复用数据。MR：数据量大，固定数据，移动cpu。
+BigTable:三维，key+column+time => value。
+
+
+
+
+
+
