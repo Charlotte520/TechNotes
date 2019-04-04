@@ -1,0 +1,50 @@
+1. search
+爬虫系统；建立索引、查询索引系统；rank系统。写入和检索分离。
+如何两个集合求交集？  for*for：O(n^2)。 =》根据docid排序：O(n)，多个集合可同时求交集。=》并行：将集合分成多个桶区间，每个区间并行求交集再合并结果。=》bitmap：每个桶的数据处于一定范围内，求交集为两bitmap 与操作。=> skiplist: O(logn)
+如何快速更新index？index分级，全量库、日增量库、小时增量库。新网页更新到小时库，查询时合并多级别index的结果。异步将小时导出到日，日到全量。
+
+2. 连接池
+list<Conn>; list<Lock>;  
+init(); 初始化n个conn和lock。
+getConn()：遍历找到lock为false的conn。用map可o(1)
+freeCoon(c)：找到conn，并释放锁。
+conn是否可用，若失效要重新建立；每个conn被取到的概率相同，实现LB；若下游故障，失效conn要剔除，实现故障转移；若有新增，动态扩充conn，实现服务发现。
+
+3. 顺序消息
+将同一userid的所有消息都发到同一server上，再串行化：rpc调用方通过RPCClient连接池访问下游服务。ConnPool.getConnection()时，传入userid，取模得到同一conn。
+
+4.协议设计：系统通信
+语法：数据、控制信息的结构；语义：发什么控制信息，完成什么动作、如何响应；时序：顺序详细说明。
+三层：应用层、安全层、传输层。
+应用层：文本（http，可读易debug、可通过kv扩展、解析效率低、对img、vedio等二进制不友好）、二进制（IP，ProtoBuf，定长header、可可扩展变长body、每个字段有固定含义。可读性差、扩展时旧版不兼容，需要version、解析效率高、天然支持二进制流）、流式xml（可读，解析代价高，标签多效率低）。
+安全层：ssl。固定密钥：client、server约定密钥和加密算法，client发送前先加密再传，server解密（安全性低）。一人一密：固定加密算法，密钥基于用户属性（uid、phone、psw等）。一次一密：每次session前协商密钥。
+传输层：tcp、udp。tcp用epoll可支持几十万conn。
+
+5. 移动app
+用ip代替dns连接后端：app第一次访问时，用域名拉ip-list，之后用本地ip-list访问server。增加ip：版本号（减少流量，保证数据随时更新）。
+日志上报：server log无法统计所有用户行为。用Google analytics等第三方工具，不能个性化。自定义协议：省流，成本高。http：get参数传要上报的数据（web server下放一文件，app发http请求该文件，分析access log）。http://xx.com/up?[bj][20190304][login]：访问up文件，分隔符为[]，字段含义固定。扩展性差，空字段也要保留占位符。http://xx.com/up?city=bj&date=20190304&action=login：扩展性好，耗流量（无效数据、url、key冗余、频繁）。=》手动构造http请求；短域名；key简短c代替city；本地存储，定时上报，数据压缩。如特殊时间点（app打开、关闭、后台转活跃）；按时间（每隔10min）；按数据量（每10条）。
+
+6. 微服务
+rpc：序列化/反、网络框架、连接池、收发线程、超时处理、状态机。
+rpc client：
+序列化：数据存储/传输时，要将object转为连续空间的二进制字节流（db的b+树索引要转存到磁盘；redis的kv持久化；socket发送的数据）。可用xml/json自描述的标记性语言；二进制协议:seqid,key_len,key,val_len,val_type,val...，嵌套类型等。考虑解析效率；压缩率；扩展性；可读性；跨语言。
+同步调用：r=add(a1,a2)。序列化组件、连接池组件（LB、故障转移、发送超时等）。
+异步调用：add(a1,a2,callback); callback(r){...} 上下文管理器、下游收发队列、下游收发线程、超时管理器。上下文：对请求包生成id，context(id,time,cb,timeout_cb)，以id为key保存到map中。req、res都带id。超时：timer扫描context map，若超时调用timeout_cb，删除。
+
+7.LB
+dns轮询；lvs os层面，f5硬件；nginx（轮询、最少连接、ip hash、weight）；web server到service用conn pool；数据层：请求/数据均衡，可按range（请求不一定均衡）或hash（不易扩展）切分数据。
+异构server LB：静态weight；动态weight（conn poll初始给每个server的w=60,每成功处理一个请求，w+1;超时处理w-10,限定范围为[0-100]）
+过载保护：server静态设阈值，超出的请求丢弃；动态（成功+1,超时-10），策略：若连续3个请求都timeout，接下来的若干秒不发给它请求，如10s。若w为0，接下来更长时间不发请求，如fullGC的机器等1min。
+
+8. 运维
+无损上线：升级重启时，正在访问的用户会失败。若升级web-server，给nginx发指令，将s1上的流量切走，旧流量处理完后升级重启。若升级service，给rpc server发指令，通过tcp长连接通知rpc client，由其conn pool切走，server将旧流量处理完再升级。
+
+9. mysql
+主从延时：slave同步master binlog，单线程落盘到relaylog，再单线程重放。=》多线程重放，如何切分relaylog，保证执行顺序和master一致？若多库，可hash(db_name)%#threadNum，不同库并行，同一库串行。=》master上并行执行的事务分为一组，编号GTID，相同last_committed的可并发回放。
+
+10.IM
+多点登录：gate（保持与client的连接），cache（userid：online，gateNo）。接收方多点登录时，cache记录(userid_pc: online,gateNo)。发送方多点：消息也要发给发送方其他登录端。
+消息漫游：存云端，client存last_msg_id。
+离线消息：发送的消息写入db则发送成功。receiver_uid,msgid,time,senderid,msgtype,msgcontent... B上线时根据(receiverid+senderid)查询，返回，ack后，再删除。要获取所有好友的离线消息，要多次请求。=》按需省流量，先拉各好友的msg count，查看时再发请求。=》减少请求次数，根据receiverid查询，本地再根据senderid分组。一次拉取数据包太大：分页，先拉最新，拉取下一页相当于对前一页的ack。
+群聊：在线好友立即收消息；离线好友登录后收。群成员表：(groupid,userid)，群消息表(groupid,msgid,senderid,time,content)，群离线消息表(userid,groupid,msgid)，减少msg content冗余。上线后收到消息，删(uid,gid,mid)。=》不要存每条msgid，存(userid,groupid,last_ack_msgid)，拉取之后所有msg。
+
