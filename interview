@@ -12,3 +12,4 @@ fb用pull；instagram：push+pull；twitter：pull；朋友圈：push。
 2. OOD
 SOLID原则：single responsibility；open close（open to extension, close to modification）；liskov substitution(任何子类可替换其基类)；dependency inversion（抽象不依赖具体实现）。         
 5C解题法：clarify(what, how)；core objects; 
+方法：public：所有类都可访问；private：只有本类可访问；protected：本类和子类可访问；不指定，同一pkg里的类可访问（适合UT中，可令test包名和src包名相同）。
