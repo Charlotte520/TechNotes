@@ -48,3 +48,27 @@ dns轮询；lvs os层面，f5硬件；nginx（轮询、最少连接、ip hash、
 离线消息：发送的消息写入db则发送成功。receiver_uid,msgid,time,senderid,msgtype,msgcontent... B上线时根据(receiverid+senderid)查询，返回，ack后，再删除。要获取所有好友的离线消息，要多次请求。=》按需省流量，先拉各好友的msg count，查看时再发请求。=》减少请求次数，根据receiverid查询，本地再根据senderid分组。一次拉取数据包太大：分页，先拉最新，拉取下一页相当于对前一页的ack。
 群聊：在线好友立即收消息；离线好友登录后收。群成员表：(groupid,userid)，群消息表(groupid,msgid,senderid,time,content)，群离线消息表(userid,groupid,msgid)，减少msg content冗余。上线后收到消息，删(uid,gid,mid)。=》不要存每条msgid，存(userid,groupid,last_ack_msgid)，拉取之后所有msg。
 
+11. push vs pull
+系统通知：实时性要求高，push；登录弹窗，pull，用last_msg_time；批量弹窗，push，限速，或pull，请求均匀分散。
+登录状态：push。群友的消息扩散系数太大，进群时按需pull。
+网页端消息：http web socket长连接。长轮询：用http短连接拼接长连接，server夯住请求直到有通知到达，或超过阈值（150s）server返回null断开。client发起请求时，若server queue有消息，则实时返回。client收到消息，立刻再发起http请求。若server queue无消息，则等待。若有消息到达，返回消息，再连接。若消息到达时，无连接，则放入queue。
+群消息已读回执：消息回执表 msg_acks(sender, msg, receiver, group, if_ack)  server收到发送的消息时，写msg表，插入msg_ack，if_ack为false。接收方修改last_ack_msgid时，修改if_ack，查询sender状态，若在线则push已读消息，否则下次上线时从ack表pull每条消息的已读回执。=》批量ack
+
+12. cache
+memcache 快 vs redis 功能多: redis支持hash、list、set等复杂结构；可持久化（定期snapshot不保证数据不丢，AOF会降低效率且数据量不能太大），重启时快速恢复数据而不是从db获取，适合只读或允许不一致的场景；高可用（主从复制，读写分离，sentinel监控主从服务，故障自动转移）；可支持1M以上的value大小。实现：内存（m预分配内存池，r临时申请，可能有碎片）；虚拟内存（m全部物理内存，r用vm支持更多数据，但有可能swap）；网络（都是非阻塞IO复用。r提供非kv存储外的排序、聚合等，复杂cpu计算可能阻塞io）；线程（m多线程，主监听，worker接受请求读写，可能有锁冲突。r单线程，无锁冲突，但无法利用多核）。
+不要将cache用作service间传数据（用mq），导致service耦合；不同service要有独立的cache，避免热数据被替换。
+cache挂掉，如何避免db雪崩：db扩容。cache高可用（master-slave）；水平切分（某实例挂掉，不会所有流量都到db）。
+
+13. mysql
+实践：存储引擎用innodb；字符集用utf8（通用，无乱码风险，汉字3B，英文1B，utf8mb4用4B存表情符号）;禁用存储过程、view、触发器、event（性能影响大，调试、迁移困难，在service层做）；禁存大文件（db存路径，文件存对象存储系统）；测试、线上db隔离。表必须有primary key（unsigned int），删除无PK的表，从库会挂住。禁止用外键，由app保证完整性（影响update、delete性能，可能死锁）。字段区分char、varchar（长度固定用char减少碎片，相差大或更新少用varchar减少空间）。字段not null并设默认值（null列index困难、存储更多）。index：个数<5；频繁更新的字段不要建index；join字段类型必须相同；最左前缀。select要指定字段（减少cpu、io、带宽消耗，利用索引覆盖）。insert指定字段（变更表结构对程序无影响）。同一字段的or改成in。
+index：hash对group by、order by、比较查询会o(n)。b树：叶子、非叶子都存数据，中序遍历得到全部数据，节点大小为页大小（局部性原理、磁盘预读）。b+树：叶子存数据，非叶子只存key，内存可存更多索引，不需要中序遍历可得所有数据。myisam：index和row分开存储，unclustered，表可以无pk。pk index
+的叶子存pk和row指针，普通index的叶子存索引列和row指针。innodb：clustered index，pk index和row存在一起。表必须有唯一的clustered index，为pk或第一个非空unique index或隐藏rowid。cluster index的叶子存数据行，普通index的叶子存pk，故普通索引要扫两遍。不要用长列做pk；用趋势递增key做pk，减少insert时index分裂移动row。
+并发控制：lock &mvcc。普通锁（访问资源加锁，完成后释放），串行，不区分读写 =》共享锁s&排他锁x：读读可并行，读写/写写不并行。=》mvcc：读写可并行。redo log：保证已完成事务的acid。修改先顺序写redo log，再定期将内存数据刷到磁盘，重启后重做redo log，将未刷到磁盘的内容写回。undo log：保证未完成事务不影响acid。未提交时，旧数据放undo log，回滚/崩溃时，根据undo log撤销未提交事务的影响。insert操作，记录pk(row id)，回滚时删除。update/delete，记录旧数据行，回滚时恢复。记录到回滚段中。提交后删除该段的undo log。=》mvcc每行增加txid(最近一次修改行的事务id)，roll_ptr（指向回滚段undolog的指针），row_id。旧数据放入回滚段，可高并发读。
+innodb：默认rr，最常用rc。read uncommited级别：select不加锁，可能脏读。RC隔离级别下：普通读为快照读；加锁select、update、delete等，foreign key constraint checking和duplidate key checking要锁区间，其他用record lock，可能幻读。RR隔离级别下：快照读 consistent nonblocking read（普通select语句），（保证事务读到的数据，要么是开始前就已存在数据，要么是本事务自身插入、修改的）。非快照读，select* lock in share mode/ select * for update，update、delete等语句，若在unique index用unique search condition，用record lock；若range-type search condition，用gap lock、next-key lock，避免范围间插入导致的幻读和不可重复读。串行化级别：select隐式转为select in share mode，与update、delete互斥。
+myisam vs innodb: m不支持事务，可lock table，不支持foreign key。适合select+insert场景，尾部顺序增加，快。innodb行锁实现在index上，若没有命中index，退化为表锁。
+innodb 7种锁：shared&exclusive lock（行级）；intention lock（表级，select lock in share mode设intention shared lock，for update设intention exclusive lock。事务要加s锁，必须先获取is，要获取x锁，必须先获取ix锁。is、ix可并行。is与s可并行，is与x、ix与s不可并行）；record lock；gap lock；next-key lock；insert intention lock（多个事务，在同一个索引、同一范围插入时，若插入位置不冲突不阻塞）；auto-inc lock（表级，若事务a正在对auto-inc的记录insert，其他事务的插入要等待，保证a插入连续pk）。
+innodb pk和unique index约束：insert、update时触发。
+
+
+
+
