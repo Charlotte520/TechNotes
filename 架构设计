@@ -57,7 +57,7 @@ dns轮询；lvs os层面，f5硬件；nginx（轮询、最少连接、ip hash、
 12. cache
 memcache 快 vs redis 功能多: redis支持hash、list、set等复杂结构；可持久化（定期snapshot不保证数据不丢，AOF会降低效率且数据量不能太大），重启时快速恢复数据而不是从db获取，适合只读或允许不一致的场景；高可用（主从复制，读写分离，sentinel监控主从服务，故障自动转移）；可支持1M以上的value大小。实现：内存（m预分配内存池，r临时申请，可能有碎片）；虚拟内存（m全部物理内存，r用vm支持更多数据，但有可能swap）；网络（都是非阻塞IO复用。r提供非kv存储外的排序、聚合等，复杂cpu计算可能阻塞io）；线程（m多线程，主监听，worker接受请求读写，可能有锁冲突。r单线程，无锁冲突，但无法利用多核）。
 不要将cache用作service间传数据（用mq），导致service耦合；不同service要有独立的cache，避免热数据被替换。
-cache挂掉，如何避免db雪崩：db扩容。cache高可用（master-slave）；水平切分（某实例挂掉，不会所有流量都到db）。
+cache挂掉/某热点key失效，如何避免db雪崩：db扩容。cache高可用（master-slave）；水平切分（某实例挂掉，不会所有流量都到db）。ReentrantLock(key):抢到锁的线程读db，并写到cache。其他线程读cache。若设置主从cache，要双写。其他线程读从cache，或返回降级的固定内容。也可用ConcurrentHashMap<key,xx>对不同内容加不同锁。
 
 13. mysql
 实践：存储引擎用innodb；字符集用utf8（通用，无乱码风险，汉字3B，英文1B，utf8mb4用4B存表情符号）;禁用存储过程、view、触发器、event（性能影响大，调试、迁移困难，在service层做）；禁存大文件（db存路径，文件存对象存储系统）；测试、线上db隔离。表必须有primary key（unsigned int），删除无PK的表，从库会挂住。禁止用外键，由app保证完整性（影响update、delete性能，可能死锁）。字段区分char、varchar（长度固定用char减少碎片，相差大或更新少用varchar减少空间）。字段not null并设默认值（null列index困难、存储更多）。index：个数<5；频繁更新的字段不要建index；join字段类型必须相同；最左前缀。select要指定字段（减少cpu、io、带宽消耗，利用索引覆盖）。insert指定字段（变更表结构对程序无影响）。同一字段的or改成in。
