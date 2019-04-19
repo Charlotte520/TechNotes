@@ -58,6 +58,8 @@ dns轮询；lvs os层面，f5硬件；nginx（轮询、最少连接、ip hash、
 memcache 快 vs redis 功能多: redis支持hash、list、set等复杂结构；可持久化（定期snapshot不保证数据不丢，AOF会降低效率且数据量不能太大），重启时快速恢复数据而不是从db获取，适合只读或允许不一致的场景；高可用（主从复制，读写分离，sentinel监控主从服务，故障自动转移）；可支持1M以上的value大小。实现：内存（m预分配内存池，r临时申请，可能有碎片）；虚拟内存（m全部物理内存，r用vm支持更多数据，但有可能swap）；网络（都是非阻塞IO复用。r提供非kv存储外的排序、聚合等，复杂cpu计算可能阻塞io）；线程（m多线程，主监听，worker接受请求读写，可能有锁冲突。r单线程，无锁冲突，但无法利用多核）。
 不要将cache用作service间传数据（用mq），导致service耦合；不同service要有独立的cache，避免热数据被替换。
 cache挂掉/某热点key失效，如何避免db雪崩：db扩容。cache高可用（master-slave）；水平切分（某实例挂掉，不会所有流量都到db）。ReentrantLock(key):抢到锁的线程读db，并写到cache。其他线程读cache。若设置主从cache，要双写。其他线程读从cache，或返回降级的固定内容。也可用ConcurrentHashMap<key,xx>对不同内容加不同锁。
+cache穿透：大量访问db不存在的key。=》如何快速知道db中是否有key？bloomfilter。
+两级cache：进程内（不一致）；分布式。
 
 13. mysql
 实践：存储引擎用innodb；字符集用utf8（通用，无乱码风险，汉字3B，英文1B，utf8mb4用4B存表情符号）;禁用存储过程、view、触发器、event（性能影响大，调试、迁移困难，在service层做）；禁存大文件（db存路径，文件存对象存储系统）；测试、线上db隔离。表必须有primary key（unsigned int），删除无PK的表，从库会挂住。禁止用外键，由app保证完整性（影响update、delete性能，可能死锁）。字段区分char、varchar（长度固定用char减少碎片，相差大或更新少用varchar减少空间）。字段not null并设默认值（null列index困难、存储更多）。index：个数<5；频繁更新的字段不要建index；join字段类型必须相同；最左前缀。select要指定字段（减少cpu、io、带宽消耗，利用索引覆盖）。insert指定字段（变更表结构对程序无影响）。同一字段的or改成in。
@@ -69,6 +71,102 @@ myisam vs innodb: m不支持事务，可lock table，不支持foreign key。适�
 innodb 7种锁：shared&exclusive lock（行级）；intention lock（表级，select lock in share mode设intention shared lock，for update设intention exclusive lock。事务要加s锁，必须先获取is，要获取x锁，必须先获取ix锁。is、ix可并行。is与s可并行，is与x、ix与s不可并行）；record lock；gap lock；next-key lock；insert intention lock（多个事务，在同一个索引、同一范围插入时，若插入位置不冲突不阻塞）；auto-inc lock（表级，若事务a正在对auto-inc的记录insert，其他事务的插入要等待，保证a插入连续pk）。
 innodb pk和unique index约束：insert、update时触发。
 
+14. 秒杀 分流+限流
+客户端：限制点击次数（button变灰），提示，不发http请求。
+服务端：集群分流，负载均衡。用redis：userid/ip+timeout限制同一用户在某段时间内的访问次数。（set(k,v,ex=10s,ifnotpresent))
 
+15. 分布式锁
+jvm lock只能在本进程内使用，集群环境下无效。分布式锁：排他性（文件系统）；阻塞性；可重入性。
+zk：临时节点，创建节点的进程获得锁，释放时删除节点。其他进程watch该节点，被删除时被唤醒，重新创建。=》惊群效应：临时顺序节点。没有获取锁的进程watch前一节点。
+class DistributedLock extends Lock {
+        ZKClient client = new ZKClient("ip", "port");        
+        @Override
+        public boolean tryLock() { //不阻塞
+            try {
+                client.createEphemeral("path", "data");
+            } catch (ZkNodeExistsException e) {
+                return false;
+            }
+            return true;
+        }
+        
+        @Override
+        public void lock() {
+            if (!tryLock()) {
+                waitForLock(); //获取不到时，阻塞等待。获取成功，则递归调用重新获取
+                lock();
+            }
+        }
 
+        private void waitForLock() {
+            CountDownLatch cdl = new CountDownLatch(1);
+            ZKDataDeleteListener listener = new ZKDataDeleteListener() {
+                @Override
+                public void onDeleted(String s) {
+                    cdl.countDown();
+                }
+            };
+            client.registerDataDelete("path", listener);//1.监听
+            if (client.exists("path")) {
+                try {
+                    cdl.await(); //2.阻塞
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            client.unregisterDataDelete("path", listener); //3.被唤醒时，取消监听
+        }
+    }
+    
+   class DistributedLock2 extends Lock {
+        ZKClient client = new ZKClient("ip", "port");
+        String parentPath = "/parent";
+        String curPath;
+        String prevPath;
+        public DistributedLock() {
+            if (!client.exists(parentPath)) {//预先创建永久父节点
+                client.createPersistent(parentPath);
+            }
+        }
+        @Override
+        public boolean tryLock() { //不阻塞
+            if (curPath == null) {
+                curPath = client.createEphemeralSequential(parentPath + "/" + "aaa", "data");
+            }
+            List<String> children = client.getChildrenNames(parentPath); //获取所有子节点，排序，若本进程是最小节点则获取锁
+            Collections.sort(children);
+            if (curPath.equals(parentPath + "/" + children.get(0))) {
+                return true;
+            } else {
+                prevPath = parentPath + "/" + children.get(children.size() - 1);
+            }
+            return false;
+        }
+        @Override
+        public void lock() {
+            if (!tryLock()) {
+                waitForLock(); //获取不到时，阻塞等待。获取成功，则递归调用重新获取
+                lock();
+            }
+        }
 
+        private void waitForLock() {
+            CountDownLatch cdl = new CountDownLatch(1);
+            ZKDataDeleteListener listener = new ZKDataDeleteListener() {
+                @Override
+                public void onDeleted(String s) {
+                    cdl.countDown();
+                }
+            };
+
+            client.registerDataDelete(prevPath, listener);//1.监听
+            if (client.exists(prevPath)) {
+                try {
+                    cdl.await(); //2.阻塞
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            client.unregisterDataDelete(prevPath, listener); //3.被唤醒时，取消监听
+        }
+    }
