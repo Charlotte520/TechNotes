@@ -73,7 +73,7 @@ innodb pk和unique index约束：insert、update时触发。
 
 14. 秒杀 分流+限流
 客户端：限制点击次数（button变灰），提示，不发http请求。
-服务端：集群分流，负载均衡。用redis：userid/ip+timeout限制同一用户在某段时间内的访问次数。（set(k,v,ex=10s,ifnotpresent))
+服务端：集群分流，负载均衡。用redis：userid/ip+timeout限制同一用户在某段时间内的访问次数。（set(k,v,ex=10s,ifnotpresent))。令牌桶算法。
 
 15. 分布式锁
 jvm lock只能在本进程内使用，集群环境下无效。分布式锁：排他性（文件系统）；阻塞性；可重入性。
@@ -170,3 +170,8 @@ class DistributedLock extends Lock {
             client.unregisterDataDelete(prevPath, listener); //3.被唤醒时，取消监听
         }
     }
+
+17. 分布式事务
+ACID -》BASE：基本可用（部分功能）；最终一致。
+2PC，3PC，TCC，异步补偿，MQ。
+MQ：适合异步场景。可靠发送：数据表1+本地消息表，成功发到queue则更新消息表的状态，若超过x min没有更新，则后台线程重试。可靠接收：处理完成后手动ack，queue再删除消息。控制重试次数，人工干预。幂等：更新前先检查是否已经处理。
