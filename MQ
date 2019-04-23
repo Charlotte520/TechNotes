@@ -1,0 +1,41 @@
+RabbitMQ：高并发、高吞吐、性能高；后台管理界面；集群化、高可用部署、消息高可靠；实践多、社区活跃。缺点：erlang开发，难改造。
+RocketMQ:高并发、高吞吐、分布式事务。
+kafka：消息中间件的功能少。适合高吞吐的日志采集、数据同步、实时计算。结合storm、spark streaming等。
+
+引入原因：系统解耦；异步调用；流量削峰
+缺点：系统可用性降低；稳定性降低（丢数据、重复、下游宕机后消息堆积）；事务一致性。
+
+1. kafka
+如何实现每秒几十万的高并发写入？
+页缓存+磁盘顺序写：每次收到数据，写入os page cache，再由os顺序写到disk。
+0拷贝读：先看数据是否在os cache，若不在读磁盘后后放入os cache。再从os cache拷贝到kafka进程cache，再拷贝到socket cache，再发到网卡。多次拷贝，上下文切换。=》将fd拷贝到socket cache，将数据从os cache发到网卡。
+如何保证数据不丢？
+业务定义topic；topic可拆分为多个partition，分配到不同机器；每个partition多副本放在其他机器（1leader+多follower，主从复制，只写leader），防止宕机丢数据。
+若数据写入leader，但还没同步到follower，leader宕机：每个partition至少有1个follower在isr列表；写入时，要求leader和至少一个follower写入成功，否则写入失败重试。
+ISR：每个partition对应一个isr列表，包括leader+与leader同步的follower。若某follower没及时同步，out of sync，移出isr。
+
+2. 如何设计消息中间件
+存储：内存 or 磁盘？先写内存做缓冲，每隔几秒刷入磁盘。磁盘文件拆分规则。磁盘文件meta：数据offset、id。数据量增大，分片，扩容。
+某机器宕机后的数据丢失问题：多副本。
+生产端ack：
+消费端ack：手动。
+
+3.RabbitMQ
+需要配queue、message是否持久化：不保证完全不丢消息。接收到消息但还没持久化时，宕机则丢数据。=》事务消息（性能差）；轻量级的confirm。
+消费者：与mq建立channel，根据自增的deliverytag ack。可批量ack。
+
+2.MQ高可用
+1) kv集群
+封装mq client：连续10次retry都有异常报错、网络无法联通等，自动触发zk降级开关。
+降级方案：redis队列替代queue。但不能写value过大的数据；不能往少数热点key持续写数据（kv集群通常用hash（key）分配到不同机器，热点key会导致某机器负载过大）=》根据消息量，在kv中划分上百个队列，对应上百个key。故障后对每个消息进行hash，均匀写入固定的kv队列。
+下游mq client降级感知：
+自动恢复：后台线程，每隔一段时间尝试给mq发消息看是否恢复。可发消息后自动关闭zk降级开关。向mq发消息，下游消费完kv消息后，切换到mq。
+2) 异步转同步+限流+限制性丢弃流量
+不写mq，直接调用流控集群的备用接口。若流量超过阈值，丢弃。丢弃策略：电商，仅选少量商家的全部丢弃，大部分全量保存。
+
+3.KV高可用
+临时扩容slave+内存分片存储+小时级数据粒度
+报警后手动扩容n倍slave集群，流控集群按预设的hash算法分发数据。slave只存最近1h的数据。
+
+4.实时计算链路
+slave宕机，master感知，将计算任务重新分配到其他节点。master宕机，基于active-standby，自动切换主备。
