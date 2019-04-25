@@ -11,3 +11,10 @@ zuul：网关。统一降级、限流、认证授权、安全。
 如何获取注册列表：如何避免并发冲突？多级缓存。先读ReadOnlyCacheMap，若没有读ReadWriteCacheMap，还没有读内存。更新时，先更新内存，并删掉ReadWriteCacheMap。30s后，后台线程发现ReadWriteCacheMap空，则清空ReadOnlyCacheMap。
 上千台服务器时的访问压力：若100个服务，20台机器，共2k个服务实例，每个实例每分钟请求4次，共8k次。每秒130次，加上其他操作，约200-500次/s。日请求量：8k*60*24=1kw。
 p2p：每个instance包括所有注册表，接收到注册/下线请求时，同步转发到其他实例（异步，最终一致）。=》注册表超过单机极限？分片；每个节点主从热备；
+
+2.分布式事务
+协调者TM：协调多个事务的执行、提交、回滚，网络问题。资源处理器RM：根据协调者的要求执行、提交，而不是用本地事务的自动提交。
+xa：标准。jta：java标准。接口：TransactionManager、Transaction；ResourceManager；Xid。UserTransaction。日志用于恢复。
+2pc：准备阶段，tm给各RM发执行指令，收到执行结果suc/error。提交阶段，TM根据suc/error发commit/rollback指令，RM必须suc。
+spring框架可直接使用带xa的web服务器（weblogic）；也可集成不带xa的webserver+xa实现包（tomcat+atomikos）。
+
