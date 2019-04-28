@@ -150,3 +150,54 @@ private void use() {
             return result;
         }
     }
+
+3.请求合并提高性能（hystrix）
+每个用户请求对应一个线程，不直接调用服务接口，而是先放入队列。异步线程定时取request，转为batch请求服务接口。优点：减少网络/接口请求数；缺点：延迟。
+    class BatchRequest {
+        String id;//请求参数
+        Future<String> future;//异步获取返回结果
+    }
+
+    class MyController {
+        MyService service = new MyService();
+
+        @Path("/movie")
+        public String getMovie(String id) {
+            return service.getMovie(id);
+        }
+
+    }
+
+    class MyService {
+        MyDao dao = new MyDao();
+        LinkedBlockingQueue<BatchRequest> queue = new LinkedBlockingQueue<>();
+
+        private void init() {
+            ScheduledExecutorService exService = Executors.newScheduledThreadPool(1);//定时任务，线程数为1
+            exService.scheduleAtFixedRate(()->{  //todo：捕获异常
+                        int size = requests.size();
+                        if (size == 0) return;
+                        ArrayList<BatchRequest> requests = new ArrayList<BatchRequest>(); //取出queue中的请求，生成一次批量查询
+                        List<String> ids = new ArrayList<>();
+                        for (int i = 0; i< size; i++) {
+                            requests.add(queue.poll());
+                            ids.add(requests.get(i).id);
+                        }
+                        Map<String, String> responses = dao.getMovies(ids);//返回的是id->content
+                        for(BatchRequest req: requests) {
+                            req.future.complete(responses.get(req.id)); //将结果放入id对应的request的future中
+                        }
+
+                    },
+                    0,10,TimeUnit.MILLISECONDS);
+        }
+        public String getMovie(String id) {
+            // return dao.getMovie(id); //非批处理直接返回
+            BatchRequest req = new BatchRequest(); //合并不同用户的同类型请求，减少接口调用
+            req.id = id;
+            CompletableFuture<String> future = new CompletableFuture<>();
+            req.future = future;
+            queue.add(req);
+            return future.get(); //阻塞直到获取返回结果
+        }
+    }
