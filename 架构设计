@@ -175,3 +175,10 @@ class DistributedLock extends Lock {
 ACID -》BASE：基本可用（部分功能）；最终一致。
 2PC，3PC，TCC，异步补偿，MQ。
 MQ：适合异步场景。可靠发送：数据表1+本地消息表，成功发到queue则更新消息表的状态，若超过x min没有更新，则后台线程重试。可靠接收：处理完成后手动ack，queue再删除消息。控制重试次数，人工干预。幂等：更新前先检查是否已经处理。
+
+18. session
+tomcat session保存在concurrentHashMap中，本地缓存，以sessionid为key。如何追踪请求：产生session时，在response中向browser发送带sessionid的cookie，后续request都带该cookie。与认证登录无关，request.getSession即可获取。
+基于ip-hash负载均衡：nginx LB：轮询；ip_hash, hash(ip)%nodes；weight。=》配置简单，对应用无侵入性；便于水平扩展；只要hash均匀，可保证负载均衡。重启、水平扩展会造成部分session丢失；hash不均匀时有单点负载高。
+服务器session复制：改tomcat server.xml的cluster节点；改应用的web.xml，增加<distributable />。=》无侵入，重启或宕机不丢session。同步有延迟，内存有限，占内网带宽。IP数据传输方式：单播、组播、广播。tomcat用组播。udp广播。
+session统一缓存：HttpServletRequest:getSession  <- TomcatHttpServletRequest。实现一个继承HttpServletRequest，并包含TomcatHttpServletRequest的类MyHttpServletRequest。HttpSession <- TomcatHttpSession。实现一个继承HttpSession的MyHttpSession。用第一个Filter将tomcat request替换为my request。session失效时间由redis节点失效时间决定，logout时必须session.invalidate()。优点：适合大集群。缺点：应用有侵入，增加配置；网络开销。
+
