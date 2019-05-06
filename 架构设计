@@ -187,3 +187,30 @@ session统一缓存：HttpServletRequest:getSession  <- TomcatHttpServletRequest
 h范围：F= 0-2^32 - 1。机器hash(ip/hostname)。hash(key)%F，确定在环上的位置，再顺时针走遇到的第一台机器。用TreeMap<hash_value,machine_info>记录机器信息，map.tailMap(hash(key))可返回>=key的所有map，若为空则返回map.first第一个节点，否则返回taildmap.first。增减机器只影响本机前后环中的部分数据。=》机器数少时，节点分布不均匀导致数据倾斜。虚拟节点。ip/hostname_id。memcached、redis、guava等都有实现。
 缺点：key和host间的映射关系由hash算法决定，不灵活。若key1,2,3都想映射到hosta不容易做到。数据分布均匀，但流量和负载不一定均匀，导致实际负载并不一定均匀。
 
+20. 分布式缓存
+数据库：mysql 5.7查询缓存，8.0去掉：关注数据管理，性能由应用层保证。key为sql语句。适合频繁对同一key反复查询的场景。
+数据访问层：jvm本地缓存，ns级别，guava/hashmap，集群时无法共享数据=》分布式中间件：redis、memcached。ms级别
+redis：基于内存，也可以持久化的日志型、kv数据库，每秒处理几十万请求。
+代理服务器缓存：web server通常5k-1w。nginx：磁盘+内存缓存，key自定义（通常为url），value为xx.html，存储到指定路径。
+
+21. 分库分表
+
+查询慢：数据量大；请求过多。=》index；优化sql；缓存。
+
+读压力：多从库。
+
+写压力：多主库有一致性问题；分库，按业务。单表超过存储上限，分表。
+
+如何分表：有限取值；范围（时间）；hash。
+
+数据库中间件：客户端（在应用中集成，要配多个数据源，模块内完成数据整合，适合小集群），如sharding jdbc；服务端代理（统一管理数据源，对应用透明，易扩展），如mycat。
+
+22.bloomfilter
+100亿url，每个64B，如何存储？如何判断一个url是否在集合中？ 若直接用hash存，需要640GB，考虑load factor和冲突链表指针的开销，需要1000G。=》bitmap：数据量大，但数据范围不大；所占空间不随集合元素个数的增加而增加。=》bloomfilter：不在集合中的元素可能被误判为在，false positive。场景：爬虫对url过滤；垃圾邮件过滤；缓存击穿。
+
+
+
+
+
+
+
