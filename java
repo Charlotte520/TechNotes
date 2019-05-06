@@ -201,3 +201,124 @@ private void use() {
             return future.get(); //阻塞直到获取返回结果
         }
     }
+
+
+4.NIO/BIO（socket编程）
+java IO三种方式：BIO，NIO(同步非阻塞)，AIO（异步非阻塞）
+BIO:
+ServerSocket ss = new ServerSocket(port);
+        while (true) {
+            Socket s = ss.accept();//单线程阻塞等请求
+            BufferedReader reader = new BufferedReader(new InputStreamReader(s.getInputStream()), "utf-8");//阻塞等待输入
+            process(reader.read());
+            s.close();
+        }
+1)多线程
+Socket s = ss.accept();
+new Thread(new SocketPorcessor(s).start()); //并发量上万时，线程太多，内存不够
+2)线程池
+ExecutorService threadPool = Executors.newFixedThreadPool(100);//初始化
+threadPool.execute(new SocketProcessor(s));//线程会阻塞等待客户端数据，并发量大时，导致没有线程处理请求，响应时间长，拒绝服务。
+3)NIO 有数据才处理。阻塞、非阻塞两种工作方式。非阻塞时，可单/少量线程（#cpu core）处理大量IO连接。=》提高并发量；省硬件
+框架：Netty。buffer优化：读写指针，不用flip，移动指针。
+Selector：非阻塞模式，可检测多个SelectableChannel，事件机制通知channel处理请求。
+Buffer: position, limit, capacity。用xxBuffer.allocate(int)创建buffer；用put写数据；用buffer.flip转为读模式；读取数据。buf.clear：pos=0,limit=capacity。buf.compact:将未读取的数据移到开始。
+
+        Selector selector = Selector.open();
+
+        ServerSocketChannel ssc = ServerSocketChannel.open();
+        ssc.bind(new InetSocketAddress(port));
+        ssc.configureBlocking(false);//非阻塞
+        ssc.register(selector, SelectionKey.OP_ACCEPT);
+
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        int connCnt = 0;
+        while(true) {
+            int readyChannelCnt = selector.select();//阻塞等待就绪的事件
+            if (readyChannelCnt == 0)   continue;
+            Set<SelectionKey> keys = selector.selectedKeys();
+            Iterator<SelectionKey> iter = keys.iterator();
+            while(iter.hasNext()) {
+                SelectionKey key = iter.next();
+                if (key.isAcceptable()) {
+                    ServerSocketChannel ssssc = (ServerSocketChannel) key.channel();
+                    SocketChannel cc = ssssc.accept();
+                    cc.configureBlocking(false);
+                    cc.register(selector, SelectionKey.OP_READ, ++connCnt);
+                } else if(key.isConnectable()) {
+
+                } else if(key.isReadable()) {
+                    pool.execute(new SocketProcessor(key));
+                    key.cancel();//取消注册，防止线程处理不及时，重复注册
+                } else if (key.isWritable()) {
+
+                }
+            }
+        }
+
+5.缓存雪崩
+只有拿到锁的线程可以访问db，其他等缓存重建
+
+Object getObj(int id) {
+
+    Object obj = redis.get(id);
+
+    if (obj !=null) return obj;
+
+   //缓存失效，高并发场景要容错。并发 --> 同步
+
+    synchronized(Myservice.class) {//锁粒度太粗，阻塞请求其他id的线程
+
+        Object obj = redis.get(id);//再次查询
+
+        if (obj !=null) return obj;
+
+        obj = dbDao.get(id);
+
+        redis.put(id, obj);
+
+    }
+
+    return obj;
+
+}
+
+
+
+//记录缓存失效的瞬间，是否正在重建.。性能高，且线程安全
+
+ConcurrentHashMap<String, String> cachebuildflag = new ConcurrentHashMap<>();
+
+
+
+boolean flag = false;
+
+try {
+
+    flag = cachebuildflag.putIfAbsent(id, "true") == null;//原子操作，而不是先get再set
+
+    if(flag) {//读db，set缓存}
+
+    else{//不等待，则降级。返回固定值；隔一段时间后重试，sleep+getObj。
+
+   
+
+    }
+
+} finally {
+
+    if(flag) cachebuildflag.remove(id);//重建成功后要清除标记
+
+}
+
+高并发读：cache。写：batch、mq、cluster、load balance
+
+
+
+
+
+
+
+
+
+
