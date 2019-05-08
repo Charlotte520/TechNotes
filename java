@@ -77,7 +77,7 @@ BlockingQueue：阻塞队列（空/满），线程安全。插入、移除、检
                         e.printStackTrace();
                     }
                     if (task != null) {
-                        task.run();
+                        task.run();//用run普通方法调用，不能用start。若用start会额外创建线程，异步执行，而无法由worker调度。
                         System.out.println("线程执行完毕："+Thread.currentThread().getName());
                     }
                 }
