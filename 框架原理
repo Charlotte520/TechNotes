@@ -1,0 +1,6 @@
+1.nginx
+内核+模块：core收到http请求，查config，将其映射到location block。module处理location中配的各个指令：handler+filter。handler处理请求，生成响应内容。filter处理内容。
+从结构上分为3种模块：核心模块：http；event；mail。基础模块：access；fastCGI；proxy；rewrite。第三方模块：upstream request hash；notice；access key。
+功能分：handlers：处理请求，输出内容，改header等，一般只有1个。filters：修改其他模块的输出。proxies：upstream类，与后端服务如fastcgi交互，进行代理&LB。
+多进程：master+多worker。master与用户交互，管理worker。worker处理client请求，实现重启、平滑升级、换log、reload配置等。创建master时，建立要监听的socket（listenfd）；再fork()多个worker，每个worker分配一个可监听client请求的socket。有connection进来，所有worker都收到通知，只有一个进程接受，惊群现象。通过accept_mutex，获得mutex的进程才添加accept事件，避免惊群。每个worker有独立的connection pool，用free_connections保存所有空闲connection_t结构，获取连接时从free表获取，用完放回。故nginx能建立的最大连接数=#workers* poolsize。若作为反向代理，每个并发要建立与client和server的两条连接，要/2。
+http请求流程：建立conn，读取一行数据，得到method、uri、http_version。再逐行处理header，得到是否有body和length。处理body。
