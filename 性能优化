@@ -1,0 +1,54 @@
+1. copyonwrite
+读多写少：若加ReadWriteLock，加writeLock时，有大量读阻塞。=》COW：读写都不加锁，写时拷贝数据副本并写入，再用volatile将副本数据赋值给原数据的引用，其他读线程立即可见。
+1) CopyOnWriteArrayList:
+    private transient volatile  Object[] array;
+    public boolean add(E e) {
+        final ReentrantLock lock = this.lock;
+        lock.lock();//只有一个线程写，不会有多个副本
+        try {
+            Object[] elements = array;
+            int len = elements.length;
+            Object[] newElements = Arrays.copyOf(elements, len+1);
+            newElements[len] = e;
+            array = newElements;
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+2) kafka
+client向kafka写数据时，先写入本地内存缓冲，形成batch后一次性发送，减少网络请求，提高吞吐。
+ConcurrentMap<topicpartition, deque<="" span=""> = new CopyOnWriteMap<TopicPartition,Deque>();  //对topic partition-deque这个kv的更新频率低，高频根据partition读取deque
+    private volatile Map map;
+    public synchronized V put(K k, V v) {
+        Map copy = new HashMap(this.map);
+        V prev = copy.put(k,v);
+        this.map = Collections.unmodifiableMap(copy);
+        return prev;
+    }
+
+2. 缓冲池减少GC
+kafka内存缓冲，batch发送后，GC内存数据。GC时若stop the world，使其他线程不能写。如何避免频繁gc？=》缓冲池。申请32MB内存，分成N个16KB的块，创建新batch时申请16KB块，写满发batch请求，块还给池。=》若池满了，阻塞写入，直到有新块释放。
+
+3.kafka分区分配
+三处：producer发消息、consumer消费消息、创建topic。
+producer.send(record)：经过拦截器、序列化器、partitioner，再到broker。若record中指定partition字段，则不用partitioner。否则根据key计算。DefaultPartitioner.partition(topic, key, keyBytes, value, valueBytes, cluster)：若key不为null，用MurMurHash2进行hash（计算快碰撞低），得到partition id。若key为null，则轮询发到可用分区。
+consumer：每个partition只能被一组consumer中的一个消费。故consumer分区分配指分配订阅topic中的分区。RangeAssignor、RoundRobinAssignor、StickyAssignor。
+broker：创建topic时，哪个broker中创建哪些partition副本，影响负载均衡。若用replica-assignment参数，则按指定方案。否则，内部逻辑，若kafka-topics.sh创建有两种策略，若broker没配broker.rack，或disable-rack-aware，用未指定机架信息的分配策略，否则采用的就是指定机架信息的分配策略。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
