@@ -4,3 +4,9 @@
 功能分：handlers：处理请求，输出内容，改header等，一般只有1个。filters：修改其他模块的输出。proxies：upstream类，与后端服务如fastcgi交互，进行代理&LB。
 多进程：master+多worker。master与用户交互，管理worker。worker处理client请求，实现重启、平滑升级、换log、reload配置等。创建master时，建立要监听的socket（listenfd）；再fork()多个worker，每个worker分配一个可监听client请求的socket。有connection进来，所有worker都收到通知，只有一个进程接受，惊群现象。通过accept_mutex，获得mutex的进程才添加accept事件，避免惊群。每个worker有独立的connection pool，用free_connections保存所有空闲connection_t结构，获取连接时从free表获取，用完放回。故nginx能建立的最大连接数=#workers* poolsize。若作为反向代理，每个并发要建立与client和server的两条连接，要/2。
 http请求流程：建立conn，读取一行数据，得到method、uri、http_version。再逐行处理header，得到是否有body和length。处理body。
+
+2. kafka
+选举：控制器；分区leader；消费者相关。
+1. controller：集群中有多个broker，只有1个被选为controller，管理所有partition和replica的状态。若某partition的leader副本出问题，controller为该partition选新leader。若某partition的ISR集合变化，controller通知所有broker更新meta。通过在zk创建临时节点/controller实现。
+2. 分区leader：partition创建（创建topic，增加partition） 或 上线（原leader下线，选新leader）时执行。按AR集合中（分配时指定）副本顺序找第一个alive的副本，且在ISR中。分区重分配也要选leader，从新AR表找第一个alive，且在ISR中。当某节点被controlled shutdown时，其上leader副本对应的partition也要重选。
+3. consumer：GroupCoordinator为组内consumer选一个leader，若第一次选，则为第一个加入group的consumer；否则取hashmap第一个key，随机。
