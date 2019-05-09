@@ -285,11 +285,9 @@ Object getObj(int id) {
 
 
 
-//记录缓存失效的瞬间，是否正在重建.。性能高，且线程安全
+//记录缓存失效的瞬间，是否正在重建。性能高，且线程安全
 
 ConcurrentHashMap<String, String> cachebuildflag = new ConcurrentHashMap<>();
-
-
 
 boolean flag = false;
 
@@ -313,9 +311,67 @@ try {
 
 高并发读：cache。写：batch、mq、cluster、load balance
 
+6.CAS实现锁  AtomicInteger源码
+    int i;//如何原子操作i++
+    static Unsafe unsafe = null;//可修改对象值、属性、数组、class等
+    static long valueOffset;
+    static {
+        //unsafe = Unsafe.getUnsafe();//不能直接用，抛SecurityException。改用反射
+        try {
+            Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+            theUnsafe.setAccessible(true);
+            unsafe = (Unsafe) theUnsafe.get(null);
 
+            //通过unsafe调用底层的硬件原语。无法直接操作内存，通过对象属性的偏移量修改
+            valueOffset = unsafe.objectFieldOffset(TEP.class.getDeclaredField("i"));
+        } catch (NoSuchFieldException e) {
+            e.printStackTrace();
+        } catch (IllegalAccessException e) {
+            e.printStackTrace();
+        }
+    }
 
+    public void add() {//局部变量不用加锁，无线程安全问题
+        boolean suc = false;
+        do {
+            int current = unsafe.getIntVolatile(this, valueOffset);//找到对象及其属性,native方法
+            suc = unsafe.compareAndSwapInt(this, valueOffset, current, current+1);//cas    
+        } while (!suc);//多次循环直到成功
+    }
 
+Hashtable用synchronized实现线程安全；hashmap非线程安全；ConcurrentHashMap用juc lock实现。
+        //如何让线程阻塞；释放锁后如何通知其他线程；
+    class MyReentrantLock implements Lock {
+        //Thread owner = null;
+        AtomicReference<Thread> owner = null;
+        ConcurrentHashMap<Thread, Object> waiters = new ConcurrentHashMap<>();
+        @Override
+        public void lock() {
+            //if (owner == null) owner = Thread.currentThread();//多线程操作不安全,用cas
+            while (!owner.compareAndSet(null, Thread.currentThread())) {
+                //没获取成功，阻塞线程。wait/notify要与synchronized一起用。用LockSupport.park/unpark
+                waiters.put(Thread.currentThread(), null);
+                LockSupport.park();//伪唤醒，还没收到unpark就继续执行，所以要在lock中自己移出
+                waiters.remove(Thread.currentThread());
+            }
+        }
+
+        @Override
+        public void unlock() {
+            if (owner.compareAndSet(Thread.currentThread(), null)) {
+                //释放通知
+                for (Map.Entry<Thread, Object> entry: waiters.entrySet()) {
+                    LockSupport.unpark(entry.getKey());
+                }
+            }
+        }
+    }
+
+7.hashmap
+数组+链表。key.hashCode()，若%length，效率低，用位计算得到index，&(len-1)。有冲突时头插法插入链表。
+默认初始长度：16。必须取2^n,否则无法通过&(len-1)得到取模的效果，hash结果不均匀。
+高并发死锁？
+java8优化？
 
 
 
