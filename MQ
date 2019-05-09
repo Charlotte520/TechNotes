@@ -1,8 +1,8 @@
-RabbitMQ：高并发、高吞吐、性能高；后台管理界面；集群化、高可用部署、消息高可靠；实践多、社区活跃。缺点：erlang开发，难改造。
+RabbitMQ：高并发、高吞吐、性能高；后台管理界面；集群化、高可用部署、消息高可靠；实践多、社区活跃。缺点：erlang开发，难改造。有broker的复杂路由：exchange：根据复杂的业务规则将msg路由到不同queue。queue：exchange向一个queue写msg，多个consumer消费该queue，但每条msg只能给一个consumer。pub/sub：每个consumer一个queue，绑定到exchange。若某consumer只消费某类数据，exchange可将带xx前缀的msg发到该queue。吞吐比kafka低一个数量级。适合不同业务系统要复杂消息路由的场景。eg.A发10条msg，3条给b，7条给c。
 RocketMQ:高并发、高吞吐、分布式事务。
-kafka：消息中间件的功能少。适合高吞吐的日志采集、数据同步、实时计算。结合storm、spark streaming等。
+kafka：消息中间件的功能少，优化吞吐。适合高吞吐的日志采集、数据同步、实时计算，几十万/百万/s。结合storm、spark streaming等。有broker的暴力路由：生产消费模型用简单的数据流模型，producer向topic写数据，分成多个partition，消息发到某个partition。消费时，每条消息只发给consumer group中的一个consumer，即partition：consumer=*：1，形成queue。publish/subscribe模型：生产者的每条消息要让所有consumer消费，使每个consumer一个group，订阅相同topic。
 
-引入原因：系统解耦；异步调用；流量削峰
+引入原因：系统解耦；异步调用；流量削峰；实时计算
 缺点：系统可用性降低；稳定性降低（丢数据、重复、下游宕机后消息堆积）；事务一致性。
 
 1. kafka
