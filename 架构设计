@@ -57,8 +57,10 @@ dns轮询；lvs os层面，f5硬件；nginx（轮询、最少连接、ip hash、
 12. cache
 memcache 快 vs redis 功能多: redis支持hash、list、set等复杂结构；可持久化（定期snapshot不保证数据不丢，AOF会降低效率且数据量不能太大），重启时快速恢复数据而不是从db获取，适合只读或允许不一致的场景；高可用（主从复制，读写分离，sentinel监控主从服务，故障自动转移）；可支持1M以上的value大小。实现：内存（m预分配内存池，r临时申请，可能有碎片）；虚拟内存（m全部物理内存，r用vm支持更多数据，但有可能swap）；网络（都是非阻塞IO复用。r提供非kv存储外的排序、聚合等，复杂cpu计算可能阻塞io）；线程（m多线程，主监听，worker接受请求读写，可能有锁冲突。r单线程，无锁冲突，但无法利用多核）。
 不要将cache用作service间传数据（用mq），导致service耦合；不同service要有独立的cache，避免热数据被替换。
-cache挂掉/某热点key失效，如何避免db雪崩：db扩容。cache高可用（master-slave）；水平切分（某实例挂掉，不会所有流量都到db）。ReentrantLock(key):抢到锁的线程读db，并写到cache。其他线程读cache。若设置主从cache，要双写。其他线程读从cache，或返回降级的固定内容。也可用ConcurrentHashMap<key,xx>对不同内容加不同锁。
-cache穿透：大量访问db不存在的key。=》如何快速知道db中是否有key？bloomfilter。
+缓存穿透：大量查询db中不存在的key。1) 将(key,null,expireTime)写入缓存。2)bloomfilter判断key在db中是否存在。
+缓存击穿：大量请求同时查某key，key恰好失效，导致大量request到db。拿到互斥锁的线程从db读数据，其他等待，缓存有数据后，读缓存。若设置主从cache，要双写。其他线程读从cache，或返回降级的固定内容。也可用ConcurrentHashMap<key,xx>对不同内容加不同锁。
+雪崩：大规模缓存失效。1)集群，主从+哨兵，高可用。2) guava本地缓存 + hystrix限流&降级 3) redis持久化，重启从磁盘恢复
+热点数据集中失效：1)expiretime=base+random，避免同时失效。2) 互斥锁
 两级cache：进程内（不一致）；分布式。
 
 13. mysql
