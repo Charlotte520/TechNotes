@@ -304,7 +304,11 @@ C/S:client可以通过server收发邮件。server接收，存储，转发。send
 XSS：在输入框输入js代码，提交则保存到server，下次展示页面时执行。=》cookie中加HttpOnly，禁止js读取cookie。server过滤输入，去掉<,>,或编码转义<变成&lt。
 SQL注入：不拼接字符串，用预编译语句，绑定变量。  密码+随机数salt（单独列），用hash计算。salt固定，会有重放攻击 =》加验证码 captcha。browser：hash(psw,salt)->hash_psw1，再计算hash(hash_psw1,captcha)->hash_psw2，只将psw2发给server。server：验证captcha是否正确；根据userid从db获取hash_psw，hash(hash_psw,captcha)->hash_psw3，比较psw2和3是否相同。
 
-
+23. h=hash（key）
+确定性（若h不同则key一定不同）；碰撞（h相同key也不一定相同）；不可逆；混淆（改变部分key得到完全不同h）
+md5:不定长信息映射到128bit固定长度。eg. bittorrent用来检测碎片的完整性。
+sha1:160bit。eg. https的SSL中。
+冲突解决方法：open addressing，包括linear probing（数据增多，冲突可能性越来越大，探测时间最坏n），quadratic probing，double hashing；chaining。
 
 
 
