@@ -185,7 +185,8 @@ tomcat session保存在concurrentHashMap中，本地缓存，以sessionid为key�
 session统一缓存：HttpServletRequest:getSession  <- TomcatHttpServletRequest。实现一个继承HttpServletRequest，并包含TomcatHttpServletRequest的类MyHttpServletRequest。HttpSession <- TomcatHttpSession。实现一个继承HttpSession的MyHttpSession。用第一个Filter将tomcat request替换为my request。session失效时间由redis节点失效时间决定，logout时必须session.invalidate()。优点：适合大集群。缺点：应用有侵入，增加配置；网络开销。
 
 19.一致性hash
-问题：随机策略无法保证相同key的请求被发到同一server=》h=hash(key)%#nodes。容错性、扩展性不好，增减机器时要移动大量数据。=》一致性hash。
+用于分布式数据存储：缓存、ES、hadoop、数据库。
+问题：随机策略无法保证相同key的请求被发到同一server=》h=hash(key)%#nodes。容错性、扩展性不好，增减机器时要移动大量数据。x->x+1台，有x/(x+1)数据失效。从0-（x* x+1 -1）之间，只有前x个的取模不变。=》一致性hash。有[0,1/(x+1)]失效。
 h范围：F= 0-2^32 - 1。机器hash(ip/hostname)。hash(key)%F，确定在环上的位置，再顺时针走遇到的第一台机器。用TreeMap<hash_value,machine_info>记录机器信息，map.tailMap(hash(key))可返回>=key的所有map，若为空则返回map.first第一个节点，否则返回taildmap.first。增减机器只影响本机前后环中的部分数据。=》机器数少时，节点分布不均匀导致数据倾斜。虚拟节点。ip/hostname_id。memcached、redis、guava等都有实现。
 缺点：key和host间的映射关系由hash算法决定，不灵活。若key1,2,3都想映射到hosta不容易做到。数据分布均匀，但流量和负载不一定均匀，导致实际负载并不一定均匀。
 
