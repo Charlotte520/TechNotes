@@ -62,6 +62,7 @@ memcache 快 vs redis 功能多: redis支持hash、list、set等复杂结构；�
 雪崩：大规模缓存失效。1)集群，主从+哨兵，高可用。2) guava本地缓存 + hystrix限流&降级 3) redis持久化，重启从磁盘恢复
 热点数据集中失效：1)expiretime=base+random，避免同时失效。2) 互斥锁
 两级cache：进程内（不一致）；分布式。
+过量请求同时访问某热点数据：如何自动发现并立刻负载均衡？通过storm实时统计key的访问次数，若1s内突然超过1w次，标记为热点，写入zk。storm将同一条数据请求分散到多机器本地计算，再汇总到一台机器全局计算，没有热点问题。系统监听znode，将数据加载到本地缓存，直接本地返回。或在系统层加限流熔断，每秒读缓存集群不超过x次，否则直接返回空。
 
 13. mysql
 实践：存储引擎用innodb；字符集用utf8（通用，无乱码风险，汉字3B，英文1B，utf8mb4用4B存表情符号）;禁用存储过程、view、触发器、event（性能影响大，调试、迁移困难，在service层做）；禁存大文件（db存路径，文件存对象存储系统）；测试、线上db隔离。表必须有primary key（unsigned int），删除无PK的表，从库会挂住。禁止用外键，由app保证完整性（影响update、delete性能，可能死锁）。字段区分char、varchar（长度固定用char减少碎片，相差大或更新少用varchar减少空间）。字段not null并设默认值（null列index困难、存储更多）。index：个数<5；频繁更新的字段不要建index；join字段类型必须相同；最左前缀。select要指定字段（减少cpu、io、带宽消耗，利用索引覆盖）。insert指定字段（变更表结构对程序无影响）。同一字段的or改成in。
