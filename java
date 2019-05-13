@@ -388,6 +388,33 @@ java同步协议中的8种原子操作：lock, unlock, read(从主内存到寄�
 synchronized：进入同步块前，先清空工作内存的共享变量，从主存重新加载，不是使用时才读；解锁前把修改的共享变量写回主存，不是修改完立即写回。通过锁保护共享变量，不同线程的同步块用同一个锁，才可保证可见。保证安全和可见性。
 volatile：线程修改完共享变量后立即写回主内存，其他线程使用前必须先从主存读。使用时加载，且read+load是连续的；修改后立即写回，且store+write连续。没有锁，只能保证可见，不能线程安全。使用比synchronized简单；性能稍好。用于限制局部代码指令重排序；一个线程修改，其他线程使用，如状态标识，数据定期发布有多个使用者。singleton将instance设为static volatile。
 
+9.jvm内存模型
+运行时数据区：线程私有的（程序计数器、虚拟机栈、本地方法栈）；共享的（堆、方法区、常量池、直接内存）。
+PC：唯一不会OOM的区域。
+虚拟机栈/本地方法栈：每个栈帧包括局部变量表、操作数栈、动态链接、方法返回值。局部变量表：基本数据类型和ref（对象起始地址的引用，或代表对象的句柄）。stackOverFlowError：若栈大小不允许动态扩展，请求栈深度超过max时。OOM：允许动态扩展，内存用完时。
+堆：eden，s0,s1,老年代tentired。细致划分可更好的分配内存。先将obj分配到eden，第一次新生代gc后，若对象还存活，进入s0/s1，且age=1。age为15时进入老年代。
+方法区：被jvm加载的类、常量、静态变量、JIT编译后的代码。jdk1.8前是堆的一部分，永久代，使jvm像heap一样管理这部分内存。1.8后，用直接内存。-XX:MetaspaceSize       若不指定大小，随着创建更多类，可能耗尽所有系统内存。
+常量池：字面量（string、final、基本数据类型的值）；符号引用（类和结构的完全限定名、字段名、方法名）
+直接内存：NIO，基于channel、buffer，直接用native函数库分配，通过java堆中的DirectByteBuffer对象引用操作，避免在java heap和native堆间复制数据。
+
+对象创建：类加载检查；分配内存；初始化0;设置对象头；执行init()。
+遇到new时，先检查常量池是否能找到类的符号引用，并检查其是否被加载、解析、初始化。
+加载后，根据大小分配heap内存。两种分配方式：指针碰撞（当GC是serial、parnew时，mark-compact，用过、没用过的内存间有分界值指针，内存规整无碎片，沿没用过的内存方向将指针移动obj size即可）；空闲列表（GC是CMS，mark-delete，jvm维护列表记录哪些内存块可用，分配一块足够大的给obj）。如何保证多线程分配安全：CAS+失败重试；TLAB（每个线程预先在eden分配一块内存，先在tlab分配，不足时用cas）。
+初始化：不包括obj header。使字段可不用赋值直接使用。
+header：类型指针：obj是哪个class的实例、如何找到class meta。运行时数据：hashcode、gc年龄、是否用偏向锁、锁状态等。
+对象访问：句柄：jvm划分一块句柄池，栈ref存储obj的句柄地址，其中包括obj和class地址，移动obj时修改句柄中的obj地址，ref不变。直接指针：栈ref存储obj地址，obj存储class地址。快。
+String：”abc“存储在常量池中。new String("abc")，创建对象。String.intern() native方法，若常量池包含abc则返回常量池引用，否则在常量池创建字符串并返回引用。
+基本类型实现常量池，Byte,Short,Integer,Long,Character,Boolean，[-128,127]缓存数据，超出则创建新对象。Float、Double无。
+
+
+
+
+
+
+
+
+
+
 
 
 
