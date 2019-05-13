@@ -10,3 +10,20 @@ http请求流程：建立conn，读取一行数据，得到method、uri、http_v
 1. controller：集群中有多个broker，只有1个被选为controller，管理所有partition和replica的状态。若某partition的leader副本出问题，controller为该partition选新leader。若某partition的ISR集合变化，controller通知所有broker更新meta。通过在zk创建临时节点/controller实现。
 2. 分区leader：partition创建（创建topic，增加partition） 或 上线（原leader下线，选新leader）时执行。按AR集合中（分配时指定）副本顺序找第一个alive的副本，且在ISR中。分区重分配也要选leader，从新AR表找第一个alive，且在ISR中。当某节点被controlled shutdown时，其上leader副本对应的partition也要重选。
 3. consumer：GroupCoordinator为组内consumer选一个leader，若第一次选，则为第一个加入group的consumer；否则取hashmap第一个key，随机。
+
+3.redis
+基于内存，单线程，非阻塞IO。可作db、缓存、消息服务。支持string、hash、list、set、sorted set、bitmap等数据结构，key为byte[]，最大512MB。可LRU淘汰、事务、不同级别的持久化。通过replica set + sentinel实现高可用。redis cluster数据分片。
+String：set (ex/px有效期，nx不存在则操作)；getset(set新值并返回原值)，mset（多key,o(n)），msetnx（任一存在则不操作），mget。Incr（能转为整型的数据自增1）,incrby(自增x)，转为64bit long。
+list：lpush/rpush/lpop/rpop。在特定index插入，o(n)。blpop，类似blockingqueue，空会阻塞。
+持久化：RDB；AOF。RDB，主进程fork子进程，定期将数据快照保存到rdb文件。不影响client请求效率，恢复快。但可能丢数据。AOF：每个请求写入log，fsync可为always（每写一条log fsync一次，安全但慢），no（os flush），everysec（后台线程每秒一次）。大量无用日志导致log太大，恢复慢。rewirte只保留最小写操作集。
+淘汰：达到maxmemory后，根据策略尝试淘汰；若无数据可淘汰或无策略，写请求返回error，读请求正常。主从同步数据时也要用一部分内存，max不能太接近主机可用内存。volatile-lru：LRU，只淘汰设定expire的key。allkeys-lru：lru。volatile-random：随机，expire key。allkeys-random。volatile-ttl：淘汰剩余有效期最短的。推荐：volatile-lru。重要数据（config等），不设有效期。热加载数据设。
+pipelining：通过mset/mget等批处理命令减少网络消耗，若连续执行多次无相关性操作，可用pipeline一次请求，server依次执行。若有前后依赖用scripting。
+事务：multi开启事务，之后的读写命令放入queue，exec后执行。不支持回滚，可exec时检查queue中命令的语法错误，若有则放弃事务，但无法检查非语法类错误。watch+事务：cas锁。执行exec时，检查被watch的key，若从watch开始至今没有变化，执行exec。
+性能：不执行耗时长的命令，o(n)；pipelining连续执行的命令；持久化；读写分离。仅把list当queue；控制hash、set、sorted set大小；禁止keys；避免一次遍历所有成员，用scan游标分批遍历。用长连接/连接池，避免频繁创建/销毁连接；批量操作用pipeline。同一秒有大量key过期会引发redis延迟。
+主从复制：一master处理写，其他slave读。master crash，sentinel自动将slave变为master。slave启动时，从master冷启动同步，导入master的rdb，此后master将增量数据同步给slave。
+分片：去掉sentinel，由cluster监控分片的节点，自动failover。一致性hash，共16384个hash slot，计算key的crc16 %16384。指定每个partition的slot。hash tag：相同tag的数据放入同一slot，如pipeline、事务涉及的key。缺点：client要为每个partition维护一个connection pool。
+client：jedis，支持connection pool，pipeline，事务，sentinel，cluster。不支持读写分离。
+
+
+
+
