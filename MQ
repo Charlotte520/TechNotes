@@ -12,7 +12,8 @@ kafka：消息中间件的功能少，优化吞吐。适合高吞吐的日志采
 如何保证数据不丢？
 业务定义topic；topic可拆分为多个partition，分配到不同机器；每个partition多副本放在其他机器（1leader+多follower，主从复制，只写leader），防止宕机丢数据。
 若数据写入leader，但还没同步到follower，leader宕机：每个partition至少有1个follower在isr列表；写入时，要求leader和至少一个follower写入成功，否则写入失败重试。
-ISR：每个partition对应一个isr列表，包括leader+与leader同步的follower。若某follower没及时同步，out of sync，移出isr。
+ISR：每个partition对应一个isr列表，包括leader+与leader同步的follower。若某follower没及时同步（如JVM GC等），out of sync，移出isr。
+Producer ACK：0，只要prod发送成功就认为成功，即使没有在leader落盘,有可能丢。1,leader写入磁盘，不管其他follower有没有同步成功，就认为成功，默认。当leader挂掉，follower还没同步，可能丢。all，leader落盘，且ISR中的follower都同步成功才成功。若isr只有一个leader，没有follower仍可能丢。
 
 2. 如何设计消息中间件
 存储：内存 or 磁盘？先写内存做缓冲，每隔几秒刷入磁盘。磁盘文件拆分规则。磁盘文件meta：数据offset、id。数据量增大，分片，扩容。
