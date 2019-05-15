@@ -188,7 +188,7 @@ session统一缓存：HttpServletRequest:getSession  <- TomcatHttpServletRequest
 19.一致性hash
 用于分布式数据存储：缓存、ES、hadoop、数据库。
 问题：随机策略无法保证相同key的请求被发到同一server=》h=hash(key)%#nodes。容错性、扩展性不好，增减机器时要移动大量数据。x->x+1台，有x/(x+1)数据失效。从0-（x* x+1 -1）之间，只有前x个的取模不变。=》一致性hash。有[0,1/(x+1)]失效。
-h范围：F= 0-2^32 - 1。机器hash(ip/hostname)。hash(key)%F，确定在环上的位置，再顺时针走遇到的第一台机器。用TreeMap<hash_value,machine_info>记录机器信息，map.tailMap(hash(key))可返回>=key的所有map，若为空则返回map.first第一个节点，否则返回taildmap.first。增减机器只影响本机前后环中的部分数据。=》机器数少时，节点分布不均匀导致数据倾斜。虚拟节点。ip/hostname_id。memcached、redis、guava等都有实现。
+h范围：F= 0-2^32 - 1。机器hash(ip/hostname)。hash(key)%F，确定在环上的位置，再顺时针走遇到的第一台机器。用TreeMap<hash_value,machine_info>记录机器信息，底层红黑树，即可快速查找，也能方便增删。map.tailMap(hash(key))可返回>=key的所有map，若为空则返回map.first第一个节点，否则返回taildmap.first。增减机器只影响本机前后环中的部分数据。=》机器数少时，节点分布不均匀导致数据倾斜。虚拟节点。ip/hostname_id。memcached、redis、guava等都有实现。
 缺点：key和host间的映射关系由hash算法决定，不灵活。若key1,2,3都想映射到hosta不容易做到。数据分布均匀，但流量和负载不一定均匀，导致实际负载并不一定均匀。
 
 20. 分布式缓存
