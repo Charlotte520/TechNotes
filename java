@@ -413,6 +413,37 @@ String：”abc“存储在常量池中。new String("abc")，创建对象。Str
 可达性分析后，没有与roots相连的obj，会被第一次标记，并根据是否有必要执行finalize()筛选。若重写了finalize()，且没被调用过，将obj放入F-Queue队列，由低优先级的finalizer线程执行
 WeakHashMap中Entry数组继承WeakReference，每个key对应一个ReferenceQueue。当key被GC时，Entry放入ReferenceQueue。put/get/remove等时，expungeStaleEntries(), weakhashmap从queue中取出相关entry，再到entry数组找到index，从链中去掉entry，value赋值为null。
 
+10. snowflake
+    class Snowflake {
+        // 0 (id非负) | 41bit timestamp | 5bit dc | 5bit worker | 12bit seq
+        long workerId; //机器id, 5bits，最多32台机器
+        long datacenterId; //机房id，5bits，最多32机房
+        long sequence; //1ms内生成的多个id的最新序号，12bits，最多4096个
+        long seqMask = -1l ^ (-1l << 12);//低12bit为1，高位为0。-1的二进制为全1
+        long lastTs = -1l;
+        long twepoch = 1288834974657L;
+
+        long workerIdShift = 12l;
+        long dcIdShift = 17l;
+        long timestampShift = 22l;
+        public synchronized long nextId() {
+            long timestamp = System.currentTimeMillis();//获取当前时间戳，ms
+            if (timestamp == lastTs) {
+                sequence = (sequence+1)&seqMask;
+                if (sequence == 0) {
+                    long tmp = System.currentTimeMillis();
+                    while (tmp <= lastTs) {
+                        tmp = System.currentTimeMillis();
+                    }
+                    timestamp = tmp;//超过范围，重新获取新时间戳
+                }
+            } else {
+                sequence = 0;
+            }
+            lastTs = timestamp;
+            return ((timestamp-twepoch)<<timestampShift) | (datacenterId << dcIdShift) | (workerId << workerId) | sequence;
+        }
+    }
 
 
 
