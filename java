@@ -338,6 +338,7 @@ try {
             suc = unsafe.compareAndSwapInt(this, valueOffset, current, current+1);//cas    
         } while (!suc);//多次循环直到成功
     }
+JUC: 声明共享变量为volatile；用cas的原子条件更新实现线程间同步；volatile读写和cas的volatile读写实现通信。    
 AbstractQueuedSynchronizer：同步组件的基础框架，以static形式出现在其他同步组件中。内部用Node类包装线程，包括pre,next,thread,waitStatus(cancelled,signal,condition,propagate)。head为队首，即持有锁的线程；tail队尾。volatile int state表示锁的状态，CAS()对其操作，0没占用，>0表示锁被当前线程重入的次数。exclusiveOwnerThread，当前锁线程。
 ReentrantLock:独占式同步组件，仅一个线程获得锁。FairSync公平锁，用new ReentrantLock(true)（新线程，若锁没有被占，看queue是否有其他等待线程，若有则插入队尾，否则抢锁）；NonFairSync非公平锁。
 Semaphore：共享式同步组件。有n个许可，申请线程数<n成功，否则失败。所有对AQS的访问都经过Sync内部类，安全。
@@ -412,6 +413,13 @@ String：”abc“存储在常量池中。new String("abc")，创建对象。Str
 引用：strong、soft、weak、phantom。强引用，Object obj = new Object()，只要引用在GC不会回收。soft：内存不足时回收，oom前清理。weak：只能生存到下次gc前。phantom：无法获取obj实例，当该obj被回收时收到系统通知。
 可达性分析后，没有与roots相连的obj，会被第一次标记，并根据是否有必要执行finalize()筛选。若重写了finalize()，且没被调用过，将obj放入F-Queue队列，由低优先级的finalizer线程执行
 WeakHashMap中Entry数组继承WeakReference，每个key对应一个ReferenceQueue。当key被GC时，Entry放入ReferenceQueue。put/get/remove等时，expungeStaleEntries(), weakhashmap从queue中取出相关entry，再到entry数组找到index，从链中去掉entry，value赋值为null。
+
+并发编程：
+线程通信：共享内存；消息传递。
+线程同步：若共享内存，要显式指定代码段互斥执行；若消息传递，隐式同步。java并发用共享内存模型，隐式通信。
+
+指令重排序：编译器优化（不改变但线程语义时）；指令级并行（cpu改变不存在数据依赖的指令执行顺序）；内存系统（cpu用缓存、读写缓冲区，使加载、存储看似乱序）。=》可能导致多线程的内存可见性问题。
+写缓冲区：cpu不用停顿等内存写数据的延迟，保证指令流水线持续运行。且批处理刷新写缓冲，可合并对同一内存地址的多次写，减少对内存总线的占用。但每个cpu的写缓冲区仅对cpu可见，cpu执行内存操作的顺序与内存实际操作的顺序不一致。
 
 10. snowflake
     class Snowflake {
