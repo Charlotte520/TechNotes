@@ -24,6 +24,9 @@ pipelining：通过mset/mget等批处理命令减少网络消耗，若连续执�
 分片：去掉sentinel，由cluster监控分片的节点，自动failover。一致性hash，共16384个hash slot，计算key的crc16 %16384。指定每个partition的slot。hash tag：相同tag的数据放入同一slot，如pipeline、事务涉及的key。缺点：client要为每个partition维护一个connection pool。
 client：jedis，支持connection pool，pipeline，事务，sentinel，cluster。不支持读写分离。
 
+4.hdfs
+namenode：文件目录树，权限设置，副本数设置等。更新内存的文件目录，顺序写editlog，定期checkpoint写回磁盘的fsimage，清空旧log。standby备节点拉取editlog，更新自己的内存，与active保持一致。
+多client同时并发写同一文件：先从namenode获取文件契约，串行化。获取契约的client开启线程发请求到namenode续约，namenode后台线程监听各契约的续约时间，若长时间没有续约则过期，允许其他client写，防止死锁。namenode用treeset根据最后一次续约时间排序，最老的在前（红黑树，无重复），每次检查最旧契约即可，避免遍历所有契约效率低。
 
 
 
