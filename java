@@ -210,12 +210,12 @@ ServerSocket ss = new ServerSocket(port);
         while (true) {
             Socket s = ss.accept();//单线程阻塞等请求
             BufferedReader reader = new BufferedReader(new InputStreamReader(s.getInputStream()), "utf-8");//阻塞等待输入
-            process(reader.read());
+            process(reader.read());//数据没有准备好，也阻塞
             s.close();
         }
 1)多线程
 Socket s = ss.accept();
-new Thread(new SocketPorcessor(s).start()); //并发量上万时，线程太多，内存不够
+new Thread(new SocketPorcessor(s).start()); //并发量上万时，线程太多，内存不够（64位系统默认线程栈最大1MB），切换开销大。
 2)线程池
 ExecutorService threadPool = Executors.newFixedThreadPool(100);//初始化
 threadPool.execute(new SocketProcessor(s));//线程会阻塞等待客户端数据，并发量大时，导致没有线程处理请求，响应时间长，拒绝服务。
@@ -373,6 +373,122 @@ Hashtable用synchronized实现线程安全；hashmap非线程安全；Concurrent
         }
     }
 
+分布式锁：有惊群效应，多线程监听同一节点，同时被唤醒导致网络、zk性能开销
+    class ZKLock implements Lock {
+        String lockPath;
+        ZKClient client;
+        ZKLock(String path) {
+            super();
+            lockPath = path;
+            client = new ZKClient(ip, port);
+        }
+
+        @Override
+        public boolean tryLock() { //非阻塞，加锁不成功直接返回
+            try {
+                client.createEphemeral(lockPath, "");
+                return true;
+            } catch (NodeExistsException e) {
+                return false;
+            }
+
+        }
+
+        @Override
+        public void lock() { //无返回值，不成功则阻塞
+            if (!tryLock()) {
+                waitForLock();
+                lock();
+            }
+        }
+
+        private void waitForLock() { 
+            CountDownLatch cdl = new CountDownLatch(1); //用于阻塞
+            IZkDataListener listener = new IZkDataListener() {
+                @Override
+                public void handleDataDeleted(String dataPath) throws Exception {
+                    cdl.countDown();//唤醒
+                }
+            };
+            client.registerDataDelete(lockPath, listener);//每次有新节点创建都要注册监听
+            if (client.exists(lockPath)) { //先检查再加锁
+                try {
+                    cdl.await();
+                } catch (InterruptedException e) {
+                }
+            }
+            client.unregisterDataDelete(lockPath, listener);//唤醒后执行这句
+        }
+
+        @Override
+        public void unlock() {
+            client.delete(lockPath);
+        }
+    }
+
+临时顺序节点：最小号获取锁，其他注册前一节点。每个节点名称为10位int，最大可有int.max个子节点。公平锁
+    class ZKLock implements Lock {
+        String lockPath;
+        ZKClient client;
+        String curPath;
+        String prePath;
+
+        ZKLock(String path) {
+            super();
+            lockPath = path;
+            client = new ZKClient(ip, port);
+            client.createPersistent(lockPath);//先创建父节点
+        }
+
+        @Override
+        public boolean tryLock() { 
+            if (curPath == null) { //不要重复创建
+                curPath = client.createEphemeralSequential(lockPath +"/", "");
+            }
+            List<String> children = client.getChildrenNames(lockPath);
+            Collections.sort(children);
+            
+            if (curPath.equals(lockPath +"/"+children.get(0))) {
+                return true;
+            } else {
+                int curIndex = children.indexOf(curPath.substring(lockPath.length()+1));
+                prePath = lockPath + "/" + children.get(curIndex-1);
+                return false;
+            }
+        }
+
+        @Override
+        public void lock() { //无返回值，不成功则阻塞
+            if (!tryLock()) {
+                waitForLock();
+                lock();
+            }
+        }
+
+        private void waitForLock() {
+            CountDownLatch cdl = new CountDownLatch(1); //用于阻塞
+            IZkDataListener listener = new IZkDataListener() {
+                @Override
+                public void handleDataDeleted(String dataPath) throws Exception {
+                    cdl.countDown();//唤醒
+                }
+            };
+            client.registerDataDelete(prePath, listener);//监听前一节点
+            if (client.exists(lockPath)) { //先检查再加锁
+                try {
+                    cdl.await();
+                } catch (InterruptedException e) {
+                }
+            }
+            client.unregisterDataDelete(prePath, listener);//唤醒后执行这句
+        }
+
+        @Override
+        public void unlock() {
+            client.delete(curPath);
+        }
+    }
+
 7.hashmap
 数组+链表。key.hashCode()，若%length，效率低，用位计算得到index，&(len-1)。有冲突时头插法插入链表。
 默认初始长度：16。必须取2^n,否则无法通过&(len-1)得到取模的效果，hash结果不均匀。
@@ -420,6 +536,11 @@ WeakHashMap中Entry数组继承WeakReference，每个key对应一个ReferenceQue
 
 指令重排序：编译器优化（不改变但线程语义时）；指令级并行（cpu改变不存在数据依赖的指令执行顺序）；内存系统（cpu用缓存、读写缓冲区，使加载、存储看似乱序）。=》可能导致多线程的内存可见性问题。
 写缓冲区：cpu不用停顿等内存写数据的延迟，保证指令流水线持续运行。且批处理刷新写缓冲，可合并对同一内存地址的多次写，减少对内存总线的占用。但每个cpu的写缓冲区仅对cpu可见，cpu执行内存操作的顺序与内存实际操作的顺序不一致。
+
+新建对象：new、反射、Object.clone()、反序列化、Unsafe.allocateInstance()
+new、反射用构造器初始化实例字段；Object.clone、反序列化通过复制已有数据初始化；unsafe不初始化。
+压缩指针：每个obj header包括64bit标记字段（jvm关于该对象的信息，如hashcode、gc、锁）和64bit类型指针。默认，对象的起始地址要对齐至8N，即内存地址低3位总是0。将64bit指针压缩到32bit，可表示2^35（32GB）地址空间，超过32G时关闭压缩指针。内存对齐不仅在对象间，也在对象的字段间，如long、double、非压缩指针时的引用字段，要求地址为8N，避免跨缓存行的字段。
+
 
 10. 高并发分布式ID生成策略
 全局唯一，趋势递增，效率高，并发控制。
