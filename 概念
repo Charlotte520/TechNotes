@@ -310,7 +310,41 @@ md5:不定长信息映射到128bit固定长度。eg. bittorrent用来检测碎�
 sha1:160bit。eg. https的SSL中。
 冲突解决方法：open addressing，包括linear probing（数据增多，冲突可能性越来越大，探测时间最坏n），quadratic probing，double hashing；chaining。
 
+24.搜索：
 
+数据库索引：对列的排序。数值；时间；文本（按字符编码集中的顺序）。前面带%的like查询：不能利用索引。适合结构化数据的精确查询；不适合半结构化（xml、html）、非结构化数据（文本、图片、视频等）的模糊查询、灵活搜索，实时性不够。
+
+搜索引擎：倒排索引。条数：英文10w，中文8w字，10w词，加上人名地名等，总计约100w，查询快。
+
+分词：词典匹配（排序，按第一个字符a组织树，其中存储的是以a开头的第二个字符的排序树的root，找到b，再b中存的以ab开头的第三个字符的排序树的root，找到c）；歧义分析，即概率。开源分词器：准确率；效率；中英文混合。IKAnalyzer, mmseg4j.  分词时统计出现次数（相关性）、位置（用于高亮）。
+
+搜索：query分词；找到匹配列表；合并。
+
+ranking：相关性。tf-idf；权重；向量空间模型；概率模型（bm25）
+
+千亿数据实时搜索：高并发（百万/s，并行计算）；实时性（<3s）；存储（分布式，多备份）。
+
+25.性能优化：
+
+jmeter：压测。tps，qps，pv，response time。
+
+定位：top看cpu、mem等。ping网络。log：/var/log/messages。jdk工具：jcmd、jmap查看堆内存是否满。jstack：线程。若压测的平均rt为5s，每隔4-5s打印一次jstack，是否有线程长于5s运行，找到可疑线程。
+
+代码分析：若出问题的是http请求，curl访问之。
+
+若调用其他接口慢：容错，弹性。如：设置timeout时间；单线程串行-》多线程并行。用线程池控制数量。
+
+java线程6种状态：new、runnable、waiting、timed_waiting, blocked, terminated
+
+26.高并发
+
+浏览器：缓存，减少请求；多子域名部署，突破浏览器连接限制；img独立服务器、域名部署，减少请求传输量；减小cookie
+
+服务器：动静分离，静态资源用cdn分发；nginx+tomcat；应用集群，负载均衡；分布式缓存；应用本地缓存；jvm参数调优；mq
+
+db：设计，sql优化；分库分表；读写分离。
+
+网络底层：加大机房带宽；cdn缓存；服务器优化；
 
 
 
