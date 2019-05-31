@@ -28,5 +28,10 @@ client：jedis，支持connection pool，pipeline，事务，sentinel，cluster�
 namenode：文件目录树，权限设置，副本数设置等。更新内存的文件目录，顺序写editlog，定期checkpoint写回磁盘的fsimage，清空旧log。standby备节点拉取editlog，更新自己的内存，与active保持一致。
 多client同时并发写同一文件：先从namenode获取文件契约，串行化。获取契约的client开启线程发请求到namenode续约，namenode后台线程监听各契约的续约时间，若长时间没有续约则过期，允许其他client写，防止死锁。namenode用treeset根据最后一次续约时间排序，最老的在前（红黑树，无重复），每次检查最旧契约即可，避免遍历所有契约效率低。
 
-
-
+5. elastic search
+如何数十亿数据查询，ms级返回？第一次搜索5-10s，后面ms。
+filesystem cache：index尽量放入内存，即机器内存至少可容纳一半数据。数据有30个字段，仅将搜索条件字段写入ES，其他写入hbase。先根据条件在ES找到id，再到hbase拿到完整数据。
+数据预热：每隔一段时间，提前访问可能的热点数据，放入fs cache。
+冷热分离：根据访问频率设立不同的index，避免热数据cache被冷数据冲掉。
+document模型：join、nested、parent-child等复杂的关联查询，在java应用层做，es写关联好的数据。
+分页：要查第x页的数据，需要把多个节点的x*10条数据都查到同一节点，再合并、处理得到第x页。翻页越深，每个节点返回的数据越多，协调处理越慢。用scroll，只能连续翻页。
