@@ -507,12 +507,12 @@ volatile：线程修改完共享变量后立即写回主内存，其他线程使
 
 9.jvm内存模型
 运行时数据区：线程私有的（程序计数器、虚拟机栈、本地方法栈）；共享的（堆、方法区、常量池、直接内存）。
-PC：唯一不会OOM的区域。
+PC：当前线程正在执行的java方法的jvm指令地址，即字节码行号。若执行native方法，为空。唯一不会OOM的区域。
 虚拟机栈/本地方法栈：每个栈帧包括局部变量表、操作数栈、动态链接、方法返回值。局部变量表：基本数据类型和ref（对象起始地址的引用，或代表对象的句柄）。stackOverFlowError：若栈大小不允许动态扩展，请求栈深度超过max时。OOM：允许动态扩展，内存用完时。
-堆：eden，s0,s1,老年代tentired。细致划分可更好的分配内存。先将obj分配到eden，第一次新生代gc后，若对象还存活，进入s0/s1，且age=1。age为15时进入老年代。
-方法区：被jvm加载的类、常量、静态变量、JIT编译后的代码。jdk1.8前是堆的一部分，永久代，使jvm像heap一样管理这部分内存。1.8后，用直接内存。-XX:MetaspaceSize       若不指定大小，随着创建更多类，可能耗尽所有系统内存。
+堆：eden，s0,s1,老年代tentired。细致划分可更好的分配内存。先将obj分配到eden，第一次新生代gc后，若对象还存活，进入s0/s1，且age=1。age为15时进入老年代。为了避免多线程同时分配内存要加锁，影响分配速度：TLAB（thread local allocation buffer）。在TLAB中，[start,end)，top指向当前可分配的地址。普通obj先分配到TLAB，较大的分配到eden其他区域，更大的直接到老年代。eden不足时，触发minor gc，存活的对象放入survivor。如何避免过早full gc：survivor。为什么两个s：减少碎片，提高性能。minor gc时，将eden和s0中存活对象复制到s1。virtual space：内存从-Xms增长到-Xmx时，预留一部分等内存增长时，分配给新生代。-XX：NewSize：新生代大小。-XX：NewRatio：老与新的比例，通常2，老太大full gc时间长，太小full gc频繁。-XX：SurvivorRatio：eden与s的比例，通常8.
+方法区：被jvm加载的类、常量、静态变量、JIT编译后的代码。jdk1.8前是堆的一部分，永久代，使jvm像heap一样管理这部分内存。1.8后，用直接内存。-XX:MetaspaceSize       若不指定大小，随着创建更多类，可能耗尽所有系统内存。oom:metaspace
 常量池：字面量（string、final、基本数据类型的值）；符号引用（类和结构的完全限定名、字段名、方法名）
-直接内存：NIO，基于channel、buffer，直接用native函数库分配，通过java堆中的DirectByteBuffer对象引用操作，避免在java heap和native堆间复制数据。
+直接内存：NIO，基于channel、buffer，直接用native函数库分配，通过java堆中的DirectByteBuffer对象引用操作，避免在java heap和native堆间复制数据。受到物理内存的限制，可能oom。
 
 对象创建：类加载检查；分配内存；初始化0;设置对象头；执行init()。
 遇到new时，先检查常量池是否能找到类的符号引用，并检查其是否被加载、解析、初始化。
@@ -541,7 +541,8 @@ WeakHashMap中Entry数组继承WeakReference，每个key对应一个ReferenceQue
 new、反射用构造器初始化实例字段；Object.clone、反序列化通过复制已有数据初始化；unsafe不初始化。
 压缩指针：每个obj header包括64bit标记字段（jvm关于该对象的信息，如hashcode、gc、锁）和64bit类型指针。默认，对象的起始地址要对齐至8N，即内存地址低3位总是0。将64bit指针压缩到32bit，可表示2^35（32GB）地址空间，超过32G时关闭压缩指针。内存对齐不仅在对象间，也在对象的字段间，如long、double、非压缩指针时的引用字段，要求地址为8N，避免跨缓存行的字段。
 
-
+jvm问题定位：cpu：用top看load average；查看占用cpu的线程。java线程：查看高占用cpu的线程是什么：printf "%x" pid，将pid转为16进制；对比jstack获取线程栈的pid；或用vmstat看上下文切换的数量。内存：jstat，jmap，生成heapdump文件，用visualvm分析。jvm运行时监控：jconsole；jstack；gc log。
+ 
 10. 高并发分布式ID生成策略
 全局唯一，趋势递增，效率高，并发控制。
 1) UUID/GUID：按OSF制定的标准计算。用于MAC地址、纳秒级时间、芯片id、cookie中存放第一次访问server返回的jsessionid等。当前日期和时间+时钟序列+全局唯一的机器识别号(MAC地址)。UUID.randomUUID();36位字符串。 优点：简单。缺点：数据库索引效率低；无意义，用户不友好；字符串空间大；集群环境易重复。适合规模不大的单体应用。
