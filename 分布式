@@ -17,6 +17,12 @@ a挂掉，若bc同时发起竞选，每个节点投票计数都为1：重置随�
 
 a commit，挂掉，其他节点没有commit，怎么办？独立线程补偿。 a 挂掉，还没选出新的leader，client请求怎么办？重试。
 
+3)paxos：超半数投票，只用最新投票
+选leader：先选一个投票负责人，收集所有机器的投票，排序，将票数最高的选做leader。=》投票负责人单点 =》机器间以p2p方式，互相发消息选leader，保证有>n/2台机器可用就可以完成投票，无单点。
+申请阶段：先在25台机器中找到5台选举队长acceptor，跟所有机器通信确定leader candidate（3个）。20台机器proposer给5个acceptor都发epoch，队长判断若epoch最新，返回ok。
+投票阶段：若某proposer p收到超一半acceptor的ok（3），告诉返回ok的队长要投票的candidate c。若3个acceptor没有其他更新的epoch，且保持与该proposer的通信，都给他返回suc。p收到3个suc，则确定leader为c。再有其他propeser申请投票，则acceptor直接返回c。
+若投票不顺利，5个accptor，2个投c，1个投b，1个投d，无法确定结果。p收到2个c，1个b，看哪个更新，若为b，改投b，再发给acceptor，此时有3个b。经过很久后达到一致。
+
 2.zk
 树形结构数据可在多机器间可靠复制，达到一致性。
 session：client和zk建立连接，定期发心跳，超时收不到则结束session。
