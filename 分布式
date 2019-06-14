@@ -160,5 +160,13 @@ if (rpc.suc) {
 4)分库：按业务。分表：批量查询、分页复杂。先找最高频的读字段，使用特点（批量读/单个读，是否关联其他表字段）。范围切分：单表大小可控，扩展时增加新表即可，不用数据迁移。但有冷热库，新库压力大，适合热点不集中的场景。hash切分：分散压力，二次扩展要迁数据。适合大数据量场景。不停机切分：原库/表打开主从同步，新表为从，进行全量实时同步。再删掉不属于它的数据。
 跨库join问题：逻辑在应用层处理。全局聚合/排序问题：多次并行。
 
+9.高性能
+1)cache：预读取、延迟写（适合对数据完整性要求不高的场景，如点赞数、参与用户数等）。热点、静态数据。浏览器cache：图片、js、css等静态资源，由cache-control控制。cdn：节点分布各地，更新慢（min），可在url后加?v=xxx，快速加载新数据。网关代理nginx：业务无关。进程内：非常高并发的场景。多节点同步的问题，可用一致性hash使只有一个节点有数据，但成本较高。分布式：。
 
+副作用：
+缓存更新，cache aside pattern，先写db再delete cache，增加一次cache miss，但避免db rollback。若db有主从库，可能在更新从库前将旧数据读到cache，则定时再读从库，若有不一致则更新，有定时开销，不适合修改频繁的场景。可由从库同步完再delte/set cache。或加一个共享存储redis，写db后，在redis中记录key=dbname+tablename+id,value=null,exp=3s。再cache delete。读数据时，先判断redis是否存在，可在一段时间内强制从主库读。
+雪崩：加锁/排队，限制读db更新cache的线程数量。exp+random，避免同时失效。
+穿透：bloomfilter判断key是否在db中存在。db中不存在的key也缓存。并发。无底洞。淘汰。
 
+2)异步：提高吞吐，适合磁盘、网络IO。缺：异步事务成本高；rpc调用时连接要到调用callback后才能释放；发请求、接收响应的不是同一线程，需要额外维护线程上下文；回调顺序不能按请求顺序。=》同步适合req/res模型，异步适合事件模型（发布event后，listener处理而不用再callback）
+同步阻塞：A call - wait - B response 。同步非阻塞：A call - A do other - A check B status - A do other - A check ... - done，如poll/select/epoll。同步为A主动获取结果，期间可做/不做其他事。异步阻塞：A call - wait - B call A callback。异步非阻塞：A call - A do other - B call A callback。异步为B通知A结果。阻塞/不阻塞由A决定。
