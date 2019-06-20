@@ -1,3 +1,12 @@
+java并发编程：
+分工：如何高效拆解任务并分配给线程 (Fork/Join)；同步：线程间如何协作 (CountDownLatch)；互斥：如何保证同一时刻只有一个线程访问共享资源(ReentrantLock)。
+为了提高CPU性能：cpu增加cache；OS增加进程、线程，分时复用cpu；编译器优化指令执行次序，更有效利用cache。=》问题：cache导致可见性、编译优化导致有序性、线程切换导致原子性 =》java内存模型：按需禁用cache、编译优化（volatile变量），synchronized。底层通过memory barrier强制将cache刷新到memory。
+死锁：互斥，占有且等待，不可抢占，循环等待 =》一次申请所有资源。
+Object.wait()、Thread.sleep()：wait释放资源，sleep不释放；wait需要被唤醒；wait需要获取monitor，否则抛异常。
+并发容器：非线程安全 ArrayList、HashMap；线程安全：ConcurrentHashMap
+
+
+
 1. 线程池
 线程开销：创建、销毁的时间开销；调度的上下文切换；内存（jvm堆中创建thread对象，os要分配对应的系统内存，默认最大1MB）
 #线程：cpu密集型应用，为#core 1~2倍。IO密集：根据阻塞时长，或[min,max]可自动增减。tomcat默认200。
@@ -373,7 +382,10 @@ Hashtable用synchronized实现线程安全；hashmap非线程安全；Concurrent
         }
     }
 
-分布式锁：有惊群效应，多线程监听同一节点，同时被唤醒导致网络、zk性能开销
+分布式锁：
+redis：单线程可用于串行化，setnx key v exp_time。缺：锁时间不可控；client-server无心跳，若连接出问题，client会被timeout；主从AP模型，若主的锁数据尚未同步到从，发生主从切换，可能两个线程同时执行。适合非强一致性场景。
+zk：CP模型可保证锁在每个节点都存在，通过2PC提交写请求，集群规模大时瓶颈。若client挂、GC等，断开连接，临时节点删除，其他线程获取锁，导致两线程同时执行。
+有惊群效应，多线程监听同一节点，同时被唤醒导致网络、zk性能开销
     class ZKLock implements Lock {
         String lockPath;
         ZKClient client;
@@ -581,10 +593,34 @@ jvm问题定位：cpu：用top看load average；查看占用cpu的线程。java�
         }
     }
 
+11.ThreadLocal
+保存线程上下文；线程安全，避免考虑线程同步的性能损失。但无法解决共享变量的更新问题。eg.记录request id，可将多个请求关联起来。Spring事务管理，记录connection，多个dao可获取同一conn，便于rollback、commit等。
+Thread类有属性变量threadLocals，类型为ThreadLocal.ThreadLocalMap。map为Entry[]，通过hashcode定位，线性探测再散列解决冲突。每个Entry为k:ThreadLocal对象，v：Object。多个Object需要多个ThreadLocal。Entry的key指向ThreadLocal为weakreference。jvm GC时，不管mem是否充足，若该对象只被weak ref，就要被回收。当ThreadLocal被GC后，map.Entry.key为null，但entry.val为object，没有回收，显式调用threadlocal.remove()回收。
+    private static ThreadLocal<Integer> threadLocal = new ThreadLocal<>();
+        new Thread(() -> {
+            try {
+                for (int i = 0; i < 100; i++) {
+                    threadLocal.set(i);
+                    System.out.println(Thread.currentThread().getName() + threadLocal.get());
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            } finally {
+                threadLocal.remove();
+            }
+        }, "t1").start();
 
-
-
-
+12.HashMap
+通过数组存所有数据，初始大小为16，超过threshold时加倍扩容。hashtable用素数，不易冲突，但取模慢，hashmap可用&代替%。index=hash(key)&(len-1)。若hash(key)对应的元素个数<8时，用Node单链表；否则用TreeNode红黑树，空间为node的2倍，但查询速度快。当元素个数增减时，node和treenode可互相转换。resize:申请2倍数组，将原数组所有记录复制到新数组，再将原数组为null，便于GC。线程不安全：put，resize时get。允许存在一个null key，所以get(key)返回null时，有可能value为null，也可能key不存在，应用containsKey判断。
+hash(key):将高16位移到低16位，再与低16位异或。
+遍历：keySet:遍历2次，一次转为iterator对象，一次从map中取出key对应的value。entrySet：1次，将kv放入entry，效率高。jdk8用map.foreach，可结合lamda更方便。
+LinkedHashmap:保持插入顺序。继承hashmap。
+TreeMap：红黑树，o(logn)，比hashmap性能低。
+HashSet:基于hashmap实现，value为new Object()
+ConcurrentHashMap：继承hashmap。hashtable用synchronized互斥，get、put不能同时进行，其他线程阻塞或轮询。CHM用分段锁，不同段数据可并发。int transient volatile sizeCtl：共享变量，为负则正在init或resize。某线程要init/resize，先竞争sizeCtl，若不成功则自旋，若成功则用unsafe.cas将其置为-1。get：无lock，volatile entry[]保证可见。put：先计算index，若为null，用cas插入。否则用synchronized对index加锁，其他位置不影响。
 
 
 
