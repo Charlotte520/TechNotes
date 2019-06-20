@@ -1,9 +1,11 @@
 1.nginx
+模块化设计；高可靠性，worker有问题，主进程重启新worker；内存消耗低，1w keep-alive长连接，2.5MB内存；热部署；5w并发。
 内核+模块：core收到http请求，查config，将其映射到location block。module处理location中配的各个指令：handler+filter。handler处理请求，生成响应内容。filter处理内容。
 从结构上分为3种模块：核心模块：http；event；mail。基础模块：access；fastCGI；proxy；rewrite。第三方模块：upstream request hash；notice；access key。
 功能分：handlers：处理请求，输出内容，改header等，一般只有1个。filters：修改其他模块的输出。proxies：upstream类，与后端服务如fastcgi交互，进行代理&LB。
 多进程：master+多worker。master与用户交互，管理worker。worker处理client请求，实现重启、平滑升级、换log、reload配置等。创建master时，建立要监听的socket（listenfd）；再fork()多个worker，每个worker分配一个可监听client请求的socket。有connection进来，所有worker都收到通知，只有一个进程接受，惊群现象。通过accept_mutex，获得mutex的进程才添加accept事件，避免惊群。每个worker有独立的connection pool，用free_connections保存所有空闲connection_t结构，获取连接时从free表获取，用完放回。故nginx能建立的最大连接数=#workers* poolsize。若作为反向代理，每个并发要建立与client和server的两条连接，要/2。
 http请求流程：建立conn，读取一行数据，得到method、uri、http_version。再逐行处理header，得到是否有body和length。处理body。
+热部署：master读取配置更新，不立即通知worker。等worker执行完毕，关闭子进程，创建新进程，执行新配置。
 
 2. kafka
 选举：控制器；分区leader；消费者相关。
@@ -13,8 +15,15 @@ http请求流程：建立conn，读取一行数据，得到method、uri、http_v
 
 3.redis
 基于内存，单线程，非阻塞IO。可作db、缓存、消息服务。支持string、hash、list、set、sorted set、bitmap等数据结构，key为byte[]，最大512MB。可LRU淘汰、事务、不同级别的持久化。通过replica set + sentinel实现高可用。redis cluster数据分片。
-String：set (ex/px有效期，nx不存在则操作)；getset(set新值并返回原值)，mset（多key,o(n)），msetnx（任一存在则不操作），mget。Incr（能转为整型的数据自增1）,incrby(自增x)，转为64bit long。
-list：lpush/rpush/lpop/rpop。在特定index插入，o(n)。blpop，类似blockingqueue，空会阻塞。
+
+基本数据结构：SDS，double linkedlist（有head、tail指针的双向链表），dictionary，skiplist，intset，ziplist。根据使用场景和内容大小，使用不同数据结构，构建对象系统：string、list、hash、set、sorted set。redisObject：type 对象类型, encoding 数据结构, lru, refcount, ptr。 
+String：set (ex/px有效期，nx不存在则操作)；getset(set新值并返回原值)，mset（多key,o(n)），msetnx（任一存在则不操作），mget。Incr（能转为整型的数据自增1）,incrby(自增x)，转为64bit long。用动态字符串SDS表示字符串值：len（不包括结束符的实际长度），alloc（最大容量），flags（1B，最低3bit表示header类型），buf（字符数组）。通过预分配和惰性空间，减少修改string时重分配内存次数。若修改后，len<1MB，预分配和2*len空间，若>1MB，预分配len+1MB空间。缩短时不立即释放多的空间。当len>32B，用SDS两次内存分配创建robj和sds，<32B，一次分配连续内存，只读。
+list：lpush/rpush/lpop/rpop。在特定index插入，o(n)。blpop，类似blockingqueue，空会阻塞。用ziplist或linkedlist实现。当元素数<512，长度<64B，用ziplist。
+hash：用MurmurHash2计算hash，链地址法解决冲突（单向链表）。基于ziplist或dict。当kv<64B,数量<512用ziplist。
+集合：基于intset或dict。当元素都为int，且数量<512，用intset。
+有序集合：跳表(效率和平衡树差不多，但实现简单)。整数集合：intset，元素为int且个数不多。基于ziplist或skiplist。当元素数<128,且<64B,用ziplist。
+压缩队列ziplist：用于list，hash。zlbytes：4B 压缩数组字节数，zltail：4B 尾节点地址，zllen：2B 节点数，zlend：1B 标记末尾。每个entry包括：previous_entry_length，可计算前一节点地址，encoding 当前节点数据类型和长度，content 节点值。
+
 持久化：RDB；AOF。RDB，主进程fork子进程，定期将数据快照保存到rdb文件。不影响client请求效率，恢复快。但可能丢数据。AOF：每个请求写入log，fsync可为always（每写一条log fsync一次，安全但慢），no（os flush），everysec（后台线程每秒一次）。大量无用日志导致log太大，恢复慢。rewirte只保留最小写操作集。
 淘汰：达到maxmemory后，根据策略尝试淘汰；若无数据可淘汰或无策略，写请求返回error，读请求正常。主从同步数据时也要用一部分内存，max不能太接近主机可用内存。volatile-lru：LRU，只淘汰设定expire的key。allkeys-lru：lru。volatile-random：随机，expire key。allkeys-random。volatile-ttl：淘汰剩余有效期最短的。推荐：volatile-lru。重要数据（config等），不设有效期。热加载数据设。
 pipelining：通过mset/mget等批处理命令减少网络消耗，若连续执行多次无相关性操作，可用pipeline一次请求，server依次执行。若有前后依赖用scripting。
@@ -25,8 +34,12 @@ pipelining：通过mset/mget等批处理命令减少网络消耗，若连续执�
 client：jedis，支持connection pool，pipeline，事务，sentinel，cluster。不支持读写分离。
 
 4.hdfs
-namenode：文件目录树，权限设置，副本数设置等。更新内存的文件目录，顺序写editlog，定期checkpoint写回磁盘的fsimage，清空旧log。standby备节点拉取editlog，更新自己的内存，与active保持一致。
+可存超大文件：disk块512B，OS KB，hdfs 64MB，可最小化寻址开销。一次写多次读：简化数据一致性，提高吞吐。不适合低延迟场景（用hbase），大量小文件（每个文件都通过namenode存meta，存储瓶颈），多用户更新（追加写，加锁，用hbase），结构化数据，数据量不大（适合TB、PB级）。
+master-slave架构：namenode：文件目录树，权限设置，副本数设置等。更新内存的文件目录，顺序写editlog，定期checkpoint写回磁盘的fsimage，清空旧log。standby备节点拉取editlog，更新自己的内存，与active保持一致。
 多client同时并发写同一文件：先从namenode获取文件契约，串行化。获取契约的client开启线程发请求到namenode续约，namenode后台线程监听各契约的续约时间，若长时间没有续约则过期，允许其他client写，防止死锁。namenode用treeset根据最后一次续约时间排序，最老的在前（红黑树，无重复），每次检查最旧契约即可，避免遍历所有契约效率低。
+replica：运行client的节点，或随即选第一个节点；与第一个不同，随机选另外机架放第二个；第三个与第二个同机架不同节点。
+读：client通过open()打开文件，rpc调用namenode，得到block及地址信息。client通过FSDataInputStream.read()读数据，连接保存文件第一个block的最近datanode，读完block后，关闭和此datanode的连接，再连接下一个datanode。读完，FSDataInputStream.close()。若读取时有datanode出错，则尝试连接该block下一datanode，并记录失败node，不再连接。
+写：create()创建，在namenode检查是否存在，权限，并创建。DFSOutputStream将数据分block，写入data queue。data streamer读取queue，并通知namenode分配datanode，将数据写入pipeline的第一个datanode1，node1发给第二个node2,2发给3。写入成功，返回ack给DFSOutputStream。
 
 5. elastic search
 如何数十亿数据查询，ms级返回？第一次搜索5-10s，后面ms。
@@ -35,3 +48,34 @@ filesystem cache：index尽量放入内存，即机器内存至少可容纳一�
 冷热分离：根据访问频率设立不同的index，避免热数据cache被冷数据冲掉。
 document模型：join、nested、parent-child等复杂的关联查询，在java应用层做，es写关联好的数据。
 分页：要查第x页的数据，需要把多个节点的x*10条数据都查到同一节点，再合并、处理得到第x页。翻页越深，每个节点返回的数据越多，协调处理越慢。用scroll，只能连续翻页。
+
+7. mapreduce
+split -> map -> map端shuffle：map结果先在mem，达到某阈值后写入磁盘，同时sort、combine、partition。-> reducer shuffle：从多mapper下载数据 -> reducer ->output.
+jobtracker：和namenode同机器。tasktracker：和datanode同机器，可将map分给同机器上的tasktracker，将jar包复制到该节点。
+client启动job，向jobtracker申请jobid，将资源复制到hdfs（jar、config、划分信息）。jobtracker将其放入queue，等调度器根据算法调度，根据split信息创建map job，分配给tasktracker。根据机器#core、mem大小有固定数量的map、reduce slot。tasktracker定期给jobtracker发heartbeat，包括map进度等信息。map：结果先放入环形mem buffer（100M），达到80%时，写入本地文件。写前根据#reduce将数据划分为多个partition，避免某reducer分配到大量数据。对每个partition数据sort，根据combiner()进行combine，减少写入磁盘的数据。多个磁盘文件时，合并，并通过sort、combine减少磁盘数据量，下一步网络传输数据量。最终得到一个已分区且排序的文件。reducer：通过jobtracker得到map输出位置，接受不同map的数据。若数据量小，放入mem，超阈值写磁盘，并不断sort、combine。
+硬件故障：jobtracker单点，用主备。tasktracker故障，jobtracker将其从集合中移除，若为map，交给其他tasktracker重新执行所有map任务，若为reduce，仅执行未完成的reduce job。
+job失败引发的故障：用户代码抛异常，任务jvm自动退出，向tasktracker父进程发错误消息，并写log。tasktracker的监听程序发现进程退出，将其标记为失败。若程序死循环、时间太长，tasktracker没有收到进度，也标记失败，并kill进程。将自己的任务计数器-1，以便再向jobtracker申请新任务。jobtracker通过heartbeat收到失败通知，重置状态，加入调度队列重新分配。若尝试4次仍不成功，整个job失败。
+
+8.zk
+文件树结构：znode，包括stat（版本、权限等）；data；children。最大1MB。可设置watch，有增删改向client仅异步发一次通知，且保证client先收到watch事件再看到状态改变，顺序一致性。
+场景：配置中心，数据发布订阅。分布式锁，CP模型，保持独占，控制时序。分布式队列，FIFO，等所有成员聚齐后开始执行。
+
+9.hbase
+与hdfs对比：hdfs追加写，全部/分区扫描，hive性能高，最大30PB；hbase可随机写，随机读，小范围/全表扫描，hive性能低4-5x，稀疏列存储，最大1PB。
+region有多个store，每个store保存一个CF，由多个memstore和多个storefile组成。
+master为region server分配region，负载均衡，为失效的region server重新分配其上的region，管理用户对table的增删改查操作。region server：维护region，处理IO，切分过大的region。zk：选举，保证只有一个master，不单点；存储所有region的寻址入口；监控region server的上下线，通知master；存储hbase schema和table meta。
+每个regionserver一个HLog。用户操作写入memstore，及HLog。HLog定期滚动出新文件，并删除已经持久化到storefile中的旧log。region server挂，master通过zk感知，先处理遗留的hlog：将不同region的log拆分，放到对应region目录，再重分配失效region，新regionserver加载region时，replay hlog到memstore，再flush到storefile。
+容错：master挂，zk重新选。无master时，可读数据，但不能region切分、负载均衡等。region server：定期发心跳到zk，若一段时间无心跳，master重分配region。
+定位region server：zk -> -ROOT- ->.META. -> 用户表。ROOT表只有一个region，zk记录其位置，包括.META.表所在的region列表。META表包含用户空间region列表，和region server地址。
+
+10.storm
+流计算框架，内存计算，通过移动数据平均分配到机器资源来提高效率。
+
+
+
+
+
+
+
+
+
