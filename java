@@ -225,6 +225,7 @@ ServerSocket ss = new ServerSocket(port);
 1)多线程
 Socket s = ss.accept();
 new Thread(new SocketPorcessor(s).start()); //并发量上万时，线程太多，内存不够（64位系统默认线程栈最大1MB），切换开销大。
+start()不能多次调用，会先判断status，不为0抛异常。if (threadStatus != 0)throw new IllegalThreadStateException();
 2)线程池
 ExecutorService threadPool = Executors.newFixedThreadPool(100);//初始化
 threadPool.execute(new SocketProcessor(s));//线程会阻塞等待客户端数据，并发量大时，导致没有线程处理请求，响应时间长，拒绝服务。
@@ -622,7 +623,28 @@ TreeMap：红黑树，o(logn)，比hashmap性能低。
 HashSet:基于hashmap实现，value为new Object()
 ConcurrentHashMap：继承hashmap。hashtable用synchronized互斥，get、put不能同时进行，其他线程阻塞或轮询。CHM用分段锁，不同段数据可并发。int transient volatile sizeCtl：共享变量，为负则正在init或resize。某线程要init/resize，先竞争sizeCtl，若不成功则自旋，若成功则用unsafe.cas将其置为-1。get：无lock，volatile entry[]保证可见。put：先计算index，若为null，用cas插入。否则用synchronized对index加锁，其他位置不影响。
 
-
-
+13.annotation
+xml描述元数据，难维护，与代码松耦合 =》annotation：
+    @Target(ElementType.METHOD) 
+    @Retention(RetentionPolicy.SOURCE) //编译阶段丢弃，不进入.class。CLASS：类加载时丢弃，处理.class时有用，默认。RUNTIME: 运行时可通过反射读取。
+    public @interface MyAnnotation {
+        public enum Priority {LOW,MEDIUM,HIGH}
+        String author() default "a";
+    }
+    
+    class MyClass {
+        @MyAnnotation(Priority = MyAnnotation.Priority.MEDIUM, author = "b")
+        public void method() {
+        }    
+    }
+   
+使用注解信息：
+        Class clz = MyClass.class;
+        for (Method method : clz.getMethods()) {
+            MyAnnotation an = (MyAnnotation)method.getAnnotation(MyAnnotation.class);
+            if (an != null) {
+                System.out.println(an.author());
+            }
+        }
 
 
