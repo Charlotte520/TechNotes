@@ -72,6 +72,8 @@ master为region server分配region，负载均衡，为失效的region server重
 容错：master挂，zk重新选。无master时，可读数据，但不能region切分、负载均衡等。region server：定期发心跳到zk，若一段时间无心跳，master重分配region。
 定位region server：zk -> -ROOT- ->.META. -> 用户表。ROOT表只有一个region，zk记录其位置，包括.META.表所在的region列表。META表包含用户空间region列表，和region server地址。
 
+多租户：不同业务的表隔离在不同namespace。权限存储在hbase:acl表。每台RS维护完整permission cache，AccessController可在master、regionserver、region等操作的hook中检查权限，不足抛AccessDeniedException。授权：client向acl region的RS发grant/revoke请求；RS将权限put/delete到acl表；AccessController将更新写入zk；通过zk watcher，通知master、其他RS更新permission cache。
+
 10.storm
 流计算框架，内存计算，通过移动数据平均分配到机器资源来提高效率。
 
