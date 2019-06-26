@@ -13,3 +13,16 @@ fb用pull；instagram：push+pull；twitter：pull；朋友圈：push。
 SOLID原则：single responsibility；open close（open to extension, close to modification）；liskov substitution(任何子类可替换其基类)；dependency inversion（抽象不依赖具体实现）。         
 5C解题法：clarify(what, how)；core objects; 
 方法：public：所有类都可访问；private：只有本类可访问；protected：本类和子类可访问；不指定，同一pkg里的类可访问（适合UT中，可令test包名和src包名相同）。
+
+3.高并发
+1)日流量大，但比较分散，偶尔用户高聚。eg. 签到，订单查询。  业务表数据量大，查询多，可用cache缓存结果。cache根据userid hash分片。
+签到赠积分：user表：积分字段；签到记录表：日期字段。根据userid查redis。若redis没有，查询db。若db签到过，同步到redis。若没有，db添加签到记录，增加积分（事务）。同步到redis。如何避免多次签到？用userid+签到日期作为unique index。
+积分抽奖：user表：积分字段；奖品表：剩余数量、updateTime。如何避免用户积分扣除，但奖品不足？先用with锁住奖品表，或update表的剩余数量+updateTime字段，锁住奖品行。再扣减积分。扣减奖品数量，提交事务。只有一个事务操作奖品数量。
+访问量大的数据统计接口：前端ajax访问，记录商品展示次数。若有1w用户在线，一次滚动屏幕展示10件商品，则有10w请求同时入库。MQ：用redis list先暂存数据，独立线程将redis数据写入db。
+查询订单：缓存第一页40条数据。用户访问订单列表，根据userid查redis，若有直接返回，若无查db。
+2)秒杀、瞬时高并发请求，有查询、有插入、更新：将用户信息写入MQ，再由多线程消费。eg. redis list
+定时发短信：用redis sorted set，按time升序。线程定时循环读set第一条，看是否超过发送时间。
+3)多级cache：redis连接数太多，导致用户连接超时。=》减少redis访问，在web server建立本地cache。只缓存请求量大的数据，且控制数量，避免占用过多内存。eg. 首页商品数据：不针对用户自定义，不频繁更新。
+
+4.限制用户操作频率
+用户在x秒内，评论/点赞等的次数不能超过y次，超出后提示禁止操作z秒。=》reids：op+userid为key，incr自增操作次数c。若c==1,说明第一次操作，设置exp为x。若c>y，设置exp为z。
