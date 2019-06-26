@@ -1,7 +1,25 @@
 1.为什么用自增列为主键
 创建表时定义的primary key；若无primary key，用第一个unique key not null列；若无，用隐含rowid(6B)。
 数据按主键顺序，存在主索引b+树的叶节点。insert时，根据主键插入适当节点和位置，当页面达到load factor(15/16)时，开辟新页节点。若用自增主键，按顺序插入当前索引节点的后续位置；若非自增，插入位置随机，需要移动数据、分页等开销，产生碎片。=》尽量用自增列为rowkey。
+自增：写入、查询、磁盘利用率都高，每次查询走两级索引。业务主键：写入、查询、磁盘利用率都低，可用一级索引、using index。联合主键：影响index大小，禁。
 2. b+树索引 vs hash索引
 b+树有序，hash无序：hash不能范围查询；不能对索引排序；不支持联合查询的最左匹配。适合无大量重复key，等值查询。innodb默认用b+树索引，实时观察搜索模式，根据监控表上索引的使用情况，用index key的前缀自动在内存创建“自适应hash index缓冲区”，加速等值查询。但负载高时，hash index增加的read/write锁会带来竞争；like、%通配符不适合hash index，要关闭。
-3.不适合建索引的情况
-record太少；经常插入、删除、修改；数据重复、分布平均的字段。
+3.索引：
+适合：primary key自动创建；where、orderby、groupby字段；join字段。
+不适合建索引的情况：record太少；经常插入、删除、修改；数据重复、分布平均的字段。
+
+4.存储原理
+record按row存储在page内，按rowkey排序，页内单链表，页间双链表。
+数据类型：整数（tinyint、smallint、mediumint、int、bigint）；浮点（float、double、decimal精确数字）；字符串（char、varchar）。变长记录：两部分存储，行内+溢出页，行内768B数据+20B溢出页指针，页内单行长度<页大小一半，16K/2=8KB，大字段<10个。varchar：1-2B存len，最长65525。
+若rowkey为bigint，每页可存16K/(8B+8B指针)=1K个rowkey，3层可存10亿数据。通常单表数据1kw。rowkey大小影响所有secondary index大小。string index通常选开头部分数据，用%xx时只能全表扫。联合index：只建一颗b+树，最左匹配，不能跳过中间列，若某列用range查询，后面的列不能用index。覆盖索引（using index）：从secondary index可以得到所有需要的字段，不用回表查primary index，减少数据访问量。
+表设计：rowkey：userid、msgid（服务生成的全局唯一）。index个数：<5。column类型：更小，简单。频繁查询的列：用using index；垂直分表。分表：按key hash，可读写均匀；按时间，冷热明确。
+
+5.性能优化
+MyISAM：.frm表定义文件，.myd数据，.myi索引文件。表锁。count单独存储。
+InnoDB：.frm,.ibd数据+索引文件，clustered index。表、行锁（行锁才有可能死锁）。通过binlog、redolog支持事务。count扫表。
+log：errorlog；binlog：所有ddl、dml语句，不包括select。ddl直接记录，dml要事务提交才记录到binlog。用于主从复制、数据备份、恢复。redolog：确保事务持久性；防止故障时有dirty page未写入磁盘，重启时根据redolog恢复。undolog：保存事务发生前的数据版本，用于rollback和MVCC。relaylog：主从复制时记录从机从主机同步的sql语句，执行。
+性能分析：开启slow query log，获取慢查询语句。explain有问题的sql语句。show profiles查看性能使用情况。
+explain：
+type：若表为空/只有一行数据，type为system。若用primary index且返回1行的where等值查询，type为const。eq_ref：多表join，前表的每个结果可匹配后表的一行，a.id=b.id。ref：非唯一性索引，用=查询，或用最左匹配查询。range：<,>,is null,between,in,like。index：select结果列使用了index，不用回表。all：全表。
+extra：using index：不用回表。using where：server层对engine的结果进行过滤，过滤字段无index。using filesort：orderby/groupby时无法用index。
+索引失效：要全值匹配；最左匹配；不要在index计算；range右边的列失效；用covering index；不要用!=,<>判断；不要用is (not) null；like不用%xx；string字段要加''；不要用or。
