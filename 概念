@@ -31,6 +31,8 @@ restful url：面向资源。get /books; get /books/1; post /books; put /books/1
 
 8. tcp/ip
 为什么要三次握手？确认双方都能双工通信。a先发给b（1），b回复a(2），b可确认a能发且b能收。a收到b的回复，可确认a能发且收，且b能收发。a再发给b（3）,b收到后确认a能收且b能发。
+client：closed ->1.第一次发送sync=1,seq=x，进入sync_sent状态。-> 3.收到server消息，发送ACK=1,ack=y+1,seq=x+1，进入established状态。双工数据传输。。。-> 1.发送fin=1,seq=u，进入fin_wait_1状态。->3.收到server消息，进入fin_wait_2状态。->5.接收server消息，直到收到fin=1，进入time_wait状态。发送ACK=1,seq=u+1,ack=w+1。2s后自动进入closed状态。
+server：listening ->2.收到client消息，发送sync=1,ACK=1,ack=x+1,seq=y，进入sync_rcvd状态。-> 4.收到client消息，进入established状态。双工数据传输。。。-> 2.收到client消息，发送ACK=1,ack=u+1,seq=v，进入close_wait状态。单工，仍可向client发送数据。->4.发完数据，发送fin=1,ACK=1,ack=u+1,seq=w，进入last_ack状态。->6.server收到ack进入closed状态。
 虚电路：建立虚拟连接，所有消息从同一通道发送。不发消息时，通道闲置。=》分组交换：不需要建立真正的连接通道，每个pkg的通道可能不一样，完全由中间节点确定下一路径。中间节点不保证可靠连接，消息可能失序、重复、丢失，由两个端点保证可靠。
 可靠传输：数据编号；超时/失败重传；连续发送，窗口满暂停发，ack来移动窗口，继续发。回退N步协议：失败分组及其以后的全部重发。选择性重传：仅重传失败分组，其后的缓存。
 socket：ip不可靠的节点通信，tcp两主机进程间通过失败重传实现的可靠传输。socket是os在tcp/udp上提供的抽象，由内核实现三次握手、累计确认、分组缓存等，包括(client ip, client port, server ip, server port)
