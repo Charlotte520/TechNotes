@@ -8,10 +8,17 @@ http请求流程：建立conn，读取一行数据，得到method、uri、http_v
 热部署：master读取配置更新，不立即通知worker。等worker执行完毕，关闭子进程，创建新进程，执行新配置。
 
 2. kafka
-选举：控制器；分区leader；消费者相关。
-1. controller：集群中有多个broker，只有1个被选为controller，管理所有partition和replica的状态。若某partition的leader副本出问题，controller为该partition选新leader。若某partition的ISR集合变化，controller通知所有broker更新meta。通过在zk创建临时节点/controller实现。
-2. 分区leader：partition创建（创建topic，增加partition） 或 上线（原leader下线，选新leader）时执行。按AR集合中（分配时指定）副本顺序找第一个alive的副本，且在ISR中。分区重分配也要选leader，从新AR表找第一个alive，且在ISR中。当某节点被controlled shutdown时，其上leader副本对应的partition也要重选。
-3. consumer：GroupCoordinator为组内consumer选一个leader，若第一次选，则为第一个加入group的consumer；否则取hashmap第一个key，随机。
+messaging system + stream processing system。支持producer/consumer点对点传输 + pub/sub 多对多模型。保证消息可靠传递；持久化、多副本容错；高吞吐，单broker可处理几千partition、百万/s消息。用于解耦、削峰填谷、异步化。
+与rabbitmq对比：rabbitmq是传统消息队列，支持AMQP等协议，更复杂的consumer routing，事务。kafka性能更高。
+选举：controller；分区leader；消费者相关。
+1. controller：集群中有多个broker，启动时向zk注册，将id写入/broker/ids临时节点。竞争创建/controller节点，只有1个被选为controller，管理所有partition和replica的状态。若broker宕机、zk连接超时，触发watcher。如：若某partition的leader副本出问题，controller为该partition选新leader。若某partition的ISR集合变化，controller通知所有broker更新meta。若controller挂，重选controller。
+2. 分区leader：partition创建（创建topic，增加partition） 或 上线（原leader下线，选新leader）时执行。按AR集合中（分配时指定）副本顺序找第一个alive的副本，且在ISR中。分区重分配也要选leader，从新AR表找第一个alive，且在ISR中。当某节点被controlled shutdown时，其上leader副本对应的partition也要重选。producer、consumer只能从partition leader读写数据，follower只做故障转移：partition已经使读请求分散到不同broker，不像mysql主从的压力都在主上；若可以从follower读，consumer offset太复杂，且producer写时也要保证写入所有follower才能返回，写性能低。
+3. producer：消息封装为ProducerRecord对象，包括topic、content、key、partition，先将kv序列化为byte[]。根据partitioner.class指定的类/RR选择partition，放入batch record，由异步线程发到broker。broker收到消息，写入成功返回RecordMetaData(topic,partition,offset)，否则返回error，可重试若干次，失败则抛异常。参数：acks=0,发送就认为成功，不用等broker响应；=1,leader收到消息则成功；all，所有isr都成功。buffer.memory。compression.type=snappy，gzip，lz4。retries。batch.size。producer的分区策略：RR，均匀；random，不如RR均匀；相同key发到相同partition；基于geo-location；自定义配置partitioner.class，实现Partitioner接口的partition()。
+4. consumer：consumer group用于提高消费吞吐，且某consumer instance挂掉后，将其partition转移到其他consumer，根据zk/kafka中的consumer offset，rebalance，可能导致重复消费/丢消息。
+kafka通过特殊topic：ConsumerOffsetTopic，记录consumer offset，cosumer member。以groupid为key。有新consumer加入，向该topic发消息。该topic的consumer将其加入consumer group，分配partition等。也可用来选GroupCoordinator，为组内consumer选一个leader，若第一次选，则为第一个加入group的consumer；否则取hashmap第一个key，随机。
+4.broker：用于LB，scalable，高吞吐。数据持久化：append-only log，按时间自动分段，定期删除旧段回收磁盘。只能保证partitin内的消息有序，无法保证全局有序。0 copy：传统磁盘文件发网络需要4次copy（DMA从磁盘到内核buffer，CPU从内核buf到用户buf，CPU从用户buf到内核buf，DMA从内核buf到网卡）。sendfile系统调用可DMA到内核，再到网卡，无需CPU。实现：TransportLayer.tranform()中调用NIO中FileChannel.transferTo()。物理存储：为broker分配partition replica时，尽量使broker的replica均匀，不同replica在不同broker上。数据保留：最长保留时间；最大数据量。分段存储，当前活跃片段不会被删除。
+
+kafka streams：其他streaming框架只能保证框架内的正确性，即exactly-once，无法控制外部数据流转状态。kafka的数据流转、计算都在内部完成，可保证e2e exactly-once。提供的是client lib，非完整功能系统（集群调度、弹性部署等）。
 
 3.redis
 基于内存，单线程，非阻塞IO。可作db、缓存、消息服务。支持string、hash、list、set、sorted set、bitmap等数据结构，key为byte[]，最大512MB。可LRU淘汰、事务、不同级别的持久化。通过replica set + sentinel实现高可用。redis cluster数据分片。单进程单线程，用queue将并发变串行。redis无锁，jedis并发访问时，在客户端通过连接池、加锁同步。或用setnx。
@@ -38,12 +45,20 @@ client：jedis，支持connection pool，pipeline，事务，sentinel，cluster�
 与memchached对比：MM数据全在内存；redis可通过RDB/AOF持久化。redis构建vm，避免系统调用。
 
 4.hdfs
-可存超大文件：disk块512B，OS KB，hdfs 64MB，可最小化寻址开销。一次写多次读：简化数据一致性，提高吞吐。不适合低延迟场景（用hbase），大量小文件（每个文件都通过namenode存meta，存储瓶颈），多用户更新（追加写，加锁，用hbase），结构化数据，数据量不大（适合TB、PB级）。
-master-slave架构：namenode：文件目录树，权限设置，副本数设置等。更新内存的文件目录，顺序写editlog，定期checkpoint写回磁盘的fsimage，清空旧log。standby备节点拉取editlog，更新自己的内存，与active保持一致。
-多client同时并发写同一文件：先从namenode获取文件契约，串行化。获取契约的client开启线程发请求到namenode续约，namenode后台线程监听各契约的续约时间，若长时间没有续约则过期，允许其他client写，防止死锁。namenode用treeset根据最后一次续约时间排序，最老的在前（红黑树，无重复），每次检查最旧契约即可，避免遍历所有契约效率低。
-replica：运行client的节点，或随即选第一个节点；与第一个不同，随机选另外机架放第二个；第三个与第二个同机架不同节点。
-读：client通过open()打开文件，rpc调用namenode，得到block及地址信息。client通过FSDataInputStream.read()读数据，连接保存文件第一个block的最近datanode，读完block后，关闭和此datanode的连接，再连接下一个datanode。读完，FSDataInputStream.close()。若读取时有datanode出错，则尝试连接该block下一datanode，并记录失败node，不再连接。
-写：create()创建，在namenode检查是否存在，权限，并创建。DFSOutputStream将数据分block，写入data queue。data streamer读取queue，并通知namenode分配datanode，将数据写入pipeline的第一个datanode1，node1发给第二个node2,2发给3。写入成功，返回ack给DFSOutputStream。
+master-slave架构：单namenode + 多datanode。namenode：对namespace操作（create、move、open、close、rename等，ACL，不支持hard/soft link），管理meta（data block位置）。文件目录树，权限设置，副本数设置等。更新内存的文件目录，顺序写editlog，定期checkpoint写回磁盘的fsimage，清空旧log。standby备节点拉取editlog，更新自己的内存，与active保持一致。datanode：可配置block大小、replica数量，默认128MB(减少寻址开销），3。
+
+架构稳定性：1) hb+复制：datanode定期向namenode发heartbeat，超时没有hb的被标记为dead，不再发IO请求。namenode会重新复制block来保证replica。2) 数据完整性：校验。计算每个block的checksum，存在namenode，client读文件时验证datanode数据和namenode checksum是否一致。3)namenode高可用：fsimage + editlog同步。
+
+一次写多次读：简化数据一致性，提高吞吐。不适合低延迟场景（用hbase），大量小文件（每个文件都通过namenode存meta，存储瓶颈），多用户更新（追加写，加锁，用hbase），结构化数据，数据量不大（适合TB、PB级）。
+
+多client同时并发写同一文件：先从namenode获取文件契约，串行化。获取契约的client开启线程发请求到namenode续约，每次写文件时renew。namenode后台线程监听各契约的续约时间，新block选DN，或数据同步到磁盘时，要检查lease。若长时间没有续约则过期，允许其他client写，防止死锁。namenode用treeset根据最后一次续约时间排序，最老的在前（红黑树，无重复），每次检查最旧契约即可，避免遍历所有契约效率低。
+
+replica：机架感知策略，第一个replica在运行client的节点，或随即选第一个节点；与第一个不同，随机选另外机架放第二个；第三个与第二个同机架不同节点。
+
+读：优先读与client最近的replica。client通过open()打开文件，rpc调用namenode，得到block及地址信息。client通过FSDataInputStream.read()读数据，连接保存文件第一个block的最近datanode，读完block后，关闭和此datanode的连接，再连接下一个datanode。读完，FSDataInputStream.close()。若读取时有datanode出错，则尝试连接该block下一datanode，并记录失败node，不再连接。
+写：create()创建，在namenode检查是否存在，权限，并创建。client的DFSOutputStream将数据分block，写入data queue。data streamer读取queue，并通知namenode分配datanode，将数据写入pipeline的第一个datanode1，node1发给第二个node2,2发给3。以数据包为单位64KB，每个DN收到包要发ack给client。若client没有收到DN ack，要调整pipeline，不给该DN发数据，replica不足的情况由NN稍后处理。全部写入成功，返回ack给DFSOutputStream。
+
+故障：节点故障；通讯故障；数据故障。NN两张表：block->DN1,DN2,DN3; DN1->block1... 若某DN的block损坏，从block表移除；若某DN挂，更新两表。定期扫描block表，是否每个block都被充分备份，不足的指定DN从其他DN获取备份。
 
 5. elastic search
 如何数十亿数据查询，ms级返回？第一次搜索5-10s，后面ms。
@@ -61,8 +76,12 @@ client启动job，向jobtracker申请jobid，将资源复制到hdfs（jar、conf
 job失败引发的故障：用户代码抛异常，任务jvm自动退出，向tasktracker父进程发错误消息，并写log。tasktracker的监听程序发现进程退出，将其标记为失败。若程序死循环、时间太长，tasktracker没有收到进度，也标记失败，并kill进程。将自己的任务计数器-1，以便再向jobtracker申请新任务。jobtracker通过heartbeat收到失败通知，重置状态，加入调度队列重新分配。若尝试4次仍不成功，整个job失败。
 
 8.zk
-文件树结构：znode，包括stat（版本、权限等）；data；children。最大1MB。可设置watch，有增删改向client仅异步发一次通知，且保证client先收到watch事件再看到状态改变，顺序一致性。
-场景：配置中心，数据发布订阅。分布式锁，CP模型，保持独占，控制时序。分布式队列，FIFO，等所有成员聚齐后开始执行。
+高性能：全量内存。高可用：集群。可靠：基于事务的更新。适合读多写少。
+场景：配置中心，数据发布订阅。分布式锁，CP模型，保持独占，控制时序。分布式队列，FIFO，等所有成员聚齐后开始执行。负载均衡。master选举。可提供顺序一致性（每个写请求分配全局唯一递增id）；原子性；单一视图；可靠性；实时性。
+文件树结构：znode，全量内存，包括stat（版本、权限等）；data；children。最大1MB。可设置watch，有增删改向client仅异步发一次通知，且保证client先收到watch事件再看到状态改变，顺序一致性。
+集群角色：leader：可读写，维护集群状态。follower：可读写，定期向leader汇报状态，参与”过半写成功“和选leader。observer：可读写，汇报状态，不能参与”过半写成功“和选leader，可用于提高读性能。client：tcp长连接到集群，建立session，通过hearbeat维护状态。
+ZAB：启动/leader故障时，集群进入恢复模式，可读但不可写。vote选leader，其他follower从他同步状态，完成后进入消息广播模式。leader接收写请求，分配zxid，广播。每个follower有队列，收到消息写本地log，返回ack给leader。leader收到>n/2 ack后，广播commit，且自己也commit。
+
 
 9.hbase
 与hdfs对比：hdfs追加写，全部/分区扫描，hive性能高，最大30PB；hbase可随机写，随机读，小范围/全表扫描，hive性能低4-5x，稀疏列存储，最大1PB。
@@ -75,8 +94,14 @@ master为region server分配region，负载均衡，为失效的region server重
 多租户：不同业务的表隔离在不同namespace。权限存储在hbase:acl表。每台RS维护完整permission cache，AccessController可在master、regionserver、region等操作的hook中检查权限，不足抛AccessDeniedException。授权：client向acl region的RS发grant/revoke请求；RS将权限put/delete到acl表；AccessController将更新写入zk；通过zk watcher，通知master、其他RS更新permission cache。
 
 10.storm
-流计算框架，内存计算，通过移动数据平均分配到机器资源来提高效率。
-
+流计算框架，内存计算，通过移动数据平均分配到机器资源来提高效率。高容错，通过ack使不丢消息。速度快，单节点可100w tuple/s。
+对比flink：storm无状态；对事件窗口支持弱，缓存整个窗口数据，结束时一起计算；支持at most/least once；通过ack追踪消息，失败/timout重发。flink：有状态；支持窗口聚合，自动管理；可exactly once；通过checkpoint容错，保存数据流、算子状态，错误时可回滚。
+topology：完整处理程序，是spout、bolt通过stream连接的有向无环图。spout：可靠（失败可重发）；不可靠。由多个task并行执行。
+grouping策略：bolt间。shuffle：随机。fields：根据某字段。all：所有bolt task都复制一份，重复处理。global：整个stream都进入其中一个bolt。direct。local：若两bolt在同一worker进程，优先发本地，减少网络传输。
+nimbus进程：通过thrift接口监听client提交的topology；根据worker资源情况，分配task，并记录到zk；通过thrift监听supervisor下载topo代码的请求，并提供下载；thrift监听UI对统计信息的读取，读zk。
+supervisor进程：按需启动worker进程。定时从zk检查是否有新topo代码，删旧代码；根据nimbus分配的task启动worker，并监控。
+worker进程：构造spout、bolt task，启动executor线程。从zk获取task，构造，交给executor线程执行；zk写heartbeat；维持传输队列，将tuple传输给其他worker。
+zk：存储状态，nimbus和supervisor都是无状态的。
 
 
 
