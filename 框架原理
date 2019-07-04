@@ -86,12 +86,51 @@ ZAB：启动/leader故障时，集群进入恢复模式，可读但不可写。v
 9.hbase
 与hdfs对比：hdfs追加写，全部/分区扫描，hive性能高，最大30PB；hbase可随机写，随机读，小范围/全表扫描，hive性能低4-5x，稀疏列存储，最大1PB。
 region有多个store，每个store保存一个CF，由多个memstore和多个storefile组成。
+client：cache .META数据。zk：master高可用（保证只有1个master运行，异常时切换备master），监控regionserver，meta入口，集群配置。hmaster：为rs分配region，维护集群LB，维护meta。发现失效region，将其分配到其他rs（hlog、storefile都在hdfs，rs无状态）。rs：读写数据，管理region，存储到hdfs。region过大，hmaster要求rs split。合并storefile。
 master为region server分配region，负载均衡，为失效的region server重新分配其上的region，管理用户对table的增删改查操作。region server：维护region，处理IO，切分过大的region。zk：选举，保证只有一个master，不单点；存储所有region的寻址入口；监控region server的上下线，通知master；存储hbase schema和table meta。
 每个regionserver一个HLog。用户操作写入memstore，及HLog。HLog定期滚动出新文件，并删除已经持久化到storefile中的旧log。region server挂，master通过zk感知，先处理遗留的hlog：将不同region的log拆分，放到对应region目录，再重分配失效region，新regionserver加载region时，replay hlog到memstore，再flush到storefile。
 容错：master挂，zk重新选。无master时，可读数据，但不能region切分、负载均衡等。region server：定期发心跳到zk，若一段时间无心跳，master重分配region。
 定位region server：zk -> -ROOT- ->.META. -> 用户表。ROOT表只有一个region，zk记录其位置，包括.META.表所在的region列表。META表包含用户空间region列表，和region server地址。
 
 多租户：不同业务的表隔离在不同namespace。权限存储在hbase:acl表。每台RS维护完整permission cache，AccessController可在master、regionserver、region等操作的hook中检查权限，不足抛AccessDeniedException。授权：client向acl region的RS发grant/revoke请求；RS将权限put/delete到acl表；AccessController将更新写入zk；通过zk watcher，通知master、其他RS更新permission cache。
+
+hbase rowkey:
+
+最长64KB，实际常10-100B。内部byte[]，按字典序排序。
+
+ns：划分业务线。权限管理；region quota限制。表默认放default下，ns hbase放系统表。
+
+
+
+读：与master无关
+
+1.client从zk获取meta表放在哪个region server。rs1
+
+2.client请求rs1，获取rowkey放在哪个region server。meta表：表：start rowkey-end rowkey -> rs。rs2
+
+3.client请求rs2，先memstore，再storefile。若访问storefile，会放入block cache，下次可从cache返回（LRU）。
+
+
+
+写：与master无关。写比读快。
+
+1.client从zk获取meta表所在rs。rs1
+
+2.client从rs1获取rowkey所在rs。rs2
+
+3.client写rs2 hlog，memstore。delete是mark delete，compact实际删除。
+
+
+
+flush & compact：hbase-default.xml  由master触发，rs执行。
+
+region server中所有region的所有mem store之和>40%堆内存；某region中所有memstore之和>128MB；某memstore超过1h没有flush，则该region所有memstore都flush。
+
+flush可能产生小文件，通过compact合并后再存到hdfs。时间、size。
+
+
+
+是否影响读写？写到hlog，立即写hdfs？若storefile还没刷到hdfs挂掉？合并后老的hfile会不会删？hfile分级？二级索引？单行原子，跨行原子？
 
 10.storm
 流计算框架，内存计算，通过移动数据平均分配到机器资源来提高效率。高容错，通过ack使不丢消息。速度快，单节点可100w tuple/s。
