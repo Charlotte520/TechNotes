@@ -1,0 +1,11 @@
+1.fork vs clone vs branch
+fork是对repository进行远程的、server端的拷贝，基于现在内容形成新repo，不包括本repo的历史。clone是对远程repo的本地拷贝，包括所有历史和分支。branch是对某repo的变更，最终要与其他代码合并。
+
+2. git pull vs fetch
+pull=fetch+merge。fetch时，git收集目标branch中所有不存在的提交，并存到本地仓库，但不合并到当前branch。
+
+3.git cherry-pick <commit-hash>
+把特定commit从一个branch引入其他branch。
+
+4.git head、工作树、索引
+工作树/工作目录/workspace：源文件目录树。staging area：是/.git/index下单一二进制文件，记录当前branch所有文件的sha1、timestamp、filename，是不带文件副本的目录。head是当前branch最后一次commit的指针。
