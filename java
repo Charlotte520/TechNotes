@@ -5,6 +5,8 @@ java并发编程：
 Object.wait()、Thread.sleep()：wait释放资源，sleep不释放；wait需要被唤醒；wait需要获取monitor，否则抛异常。
 并发容器：非线程安全 ArrayList、HashMap；线程安全：ConcurrentHashMap
 
+加锁时需要明确锁对象：synchronized func()：是对this加锁。synchronized static func()：是对A.class对象加锁。对同一对象加多个不同锁，相当于没加锁，编译优化时会去掉所有锁。临界区需要对多个对象加锁，需要定义private final Object lock = new Object()； synchronized(lock){}。
+
 
 
 1. 线程池
