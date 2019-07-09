@@ -60,6 +60,8 @@ replica：机架感知策略，第一个replica在运行client的节点，或随
 
 故障：节点故障；通讯故障；数据故障。NN两张表：block->DN1,DN2,DN3; DN1->block1... 若某DN的block损坏，从block表移除；若某DN挂，更新两表。定期扫描block表，是否每个block都被充分备份，不足的指定DN从其他DN获取备份。
 
+优化：namenode：文件数、block很多导致的内存压力=》将目录树拆分，放到不同NN，将NN和目录树的对应关系放zk；锁竞争（对任一节点加锁要对整个目录树加锁）=》对每个node加锁；跨dc。datanode：机器数上万时的rolling restart（每个dn扫所有磁盘，将所有block上报给NN，NN要加锁更新）=》dn restart前将副本信息存到leveldb，restart后不扫盘，从db load数据。发full block report前先检查NN上次收到block report的时间，有必要才发；机器下线要加锁=》先将DN标记为stale，从NN获取该DN的所有block，将block发到目的DN，再从本DN删除，不需要NN加锁；data lost；slow node。存储效率：降低存储成本。
+
 5. elastic search
 如何数十亿数据查询，ms级返回？第一次搜索5-10s，后面ms。
 filesystem cache：index尽量放入内存，即机器内存至少可容纳一半数据。数据有30个字段，仅将搜索条件字段写入ES，其他写入hbase。先根据条件在ES找到id，再到hbase拿到完整数据。
@@ -108,18 +110,16 @@ ns：划分业务线。权限管理；region quota限制。表默认放default�
 
 2.client请求rs1，获取rowkey放在哪个region server。meta表：表：start rowkey-end rowkey -> rs。rs2
 
-3.client请求rs2，先memstore，再storefile。若访问storefile，会放入block cache，下次可从cache返回（LRU）。
+3.client请求rs2，先memstore，再storefile。若访问storefile，会放入block cache，下次可从cache返回（LRU）。
+scan：1.scanapi：业务for(Result r: resultScanner)时，client先判断是否有cache，没有则发next请求给rs，获取100条数据/最大2M数据。返回后cache到本地。限制返回的数据量大小，避免一次请求过多使集群带宽不稳定；避免client OOM和timeout。缺：不同region的scan也不会并发（multiget可并发）；scan时client阻塞等待。适合OLTP少量扫描场景，且最好设置start、endkey、setFamilyMap。 2.TableScanMR：scan.setCache(500); scan.setCacheBlocks(false); 根据region分成多个sub-scan api，并行扫描原始表。适合OLAP离线大量扫描，时间基本等于最大region扫描时间。若有数据倾斜，可设置hbase.mapreduce.input.autobalance=true，将大region scan切分为多个小scan。3.snapshotscanMR：扫描原始表的snapshot resotre出来的hfile，在client直接打开region扫hdfs文件，不需要发给rs。减少对rs的影响，提高>2倍效率（网络传输小，避免rs瓶颈）。但都是一个region一个mapper，需提供其他策略细分粒度。
 
 
-
-写：与master无关。写比读快。
-
-1.client从zk获取meta表所在rs。rs1
+写：与master无关。写比读快，100台RS可支持100T/d写入。
+1.client配置autoflush=true，同步发送到server，=false，先放本地buf，由AsyncProcessor异步发送到server，可能丢失。从zk获取meta表所在rs。rs1
 
 2.client从rs1获取rowkey所在rs。rs2
 
-3.client写rs2 hlog，memstore。delete是mark delete，compact实际删除。
-
+3.client写rs2 hlog，memstore。delete是mark delete，compact实际删除。同一行数据放在同一region server，通过行锁保证行操作原子。checkAndPut/Delete/Increment/append内部也是通过行锁，加锁->get->比较->相等则put/del，否则返回失败。put/del时，先获取行锁，再获取write number，用于mvcc；写hlog，再写memstore，异步线程将hlog刷到hdfs。hlog可sync写，同步写入文件系统，不落盘（默认）。或async写，落盘。写入本地log即成功。释放行锁，共享锁。hlog结构：rowkey：region_seqid_writetime_tablename_clusterid，value：#kvs+list<kv of same row>
 
 
 flush & compact：hbase-default.xml  由master触发，rs执行。
@@ -128,9 +128,11 @@ region server中所有region的所有mem store之和>40%堆内存；某region�
 
 flush可能产生小文件，通过compact合并后再存到hdfs。时间、size。
 
+region split：等数据增长到一定程度自动split，会有热点写，浪费io。预估数据，预分区。一台rs，可有100个region。同一个表，一个region可放2-3个region。时机：ConstantSizeRegionSplitPolicy，某region最大store超过hbase.hregion.max.filesize时。没区分大小表，若阈值较大，小表不易切分。IncreasingToUpperBoundRegionSplitPolicy，自动调整阈值，可自适应大小表，但大集群时小表会有大量小region。SteppingSplitPolicy，与表的region个数有关，更友好。切分点：region中最大store的最大文件的中间block的首个rowkey。过程：原子事务，2PC。prepare：内存中初始化两个子region，生成两个HRegionInfo(tablename,regionname,startkey,endkey)，和transaction journal，记录进展。execute：rs修改zk /region-in-transition/parent_ragion_name:splitting。master检测到该节点，修改内存中region状态，可在页面模块看到。rs在hdfs 创建 /parent_region_name/.split/ 保存子信息。关闭parent region，flush，client请求得到NotServingRegionException。在hdfs创建 .split/a, b目录 和/a/column_family/reference_files，该引用文件记录splitkey和子是父的上半/下半部分。父region分裂后，将a、b拷到hdfs跟目录下。parent 修改.meta表后下线。开启a、b，修改.meta。rollback：状态机记录每个步骤的状态，根据切分状态清理垃圾。split无数据移动，major compaction时将父region数据移到子region目录，然后删除.meta表的父region。
 
+优化：region server堆内存大小，70%，避免GC过频繁/过久。datanode打开文件数，4096。数据写入效率：compress。rpc监听数量：30。hfile split大小：10G。
 
-是否影响读写？写到hlog，立即写hdfs？若storefile还没刷到hdfs挂掉？合并后老的hfile会不会删？hfile分级？二级索引？单行原子，跨行原子？
+snapshot：对文件系统、目录在某时刻的镜像。用于在线全量/增量备份；集群数据迁移。1.加锁拷贝，拷贝期间只读。2.snapshot：加锁，将memstore数据flush到hfile，建指针引用hfile，meta为snapshot。hfile落盘后不能写，当前表的所有文件建引用，新数据写入新文件。hbase通过2PC保证所有执行snapshot的rs原子操作。prepare：master在zk创建/acquired-snapshotname节点，写入snapshot table信息。所有rs监听到该节点，查看本机是否有该table。若有遍历该table所有region，执行snapshot，写入tmp目录。完成后在zk创建/acquired-snapshotname/nodeid。commit：所有rs完成后，master创建/reached-snapshotname，所有rs监听到该节点，将tmp目录移到最终目录，并创建/reached-snapshotname/nodeid。abort：所一定时间内/acquired-snapshotname下的节点个数不满足，master认为prepare超时，创建/abort-snapshotname，所有rs监听后清理tmp目录。
 
 10.storm
 流计算框架，内存计算，通过移动数据平均分配到机器资源来提高效率。高容错，通过ack使不丢消息。速度快，单节点可100w tuple/s。
