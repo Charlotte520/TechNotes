@@ -612,6 +612,171 @@ jdk中的ArrayBlockingQueue,LinkedBlockingQueue基于reentrantLock，效率不�
 无锁算法，避免加、解锁开销：入队不能覆盖未消费元素，出队不能读未写入元素。ringbuffer维护putindex，允许多个consumer同时消费，每个consumer一个takeindex，ringbuffer只维护最小的。入队：若没有足够空闲位置，用LockSupport.parkNanos()让出cpu x ns，再循环重新计算；否则用cas更新putindex。
 consumer可无锁批量消费。
 
+4.数据库连接池：HiKariCP
+标准步骤：通过data source获取db conn；创建statement；执行sql；通过resultSet获取result；释放resultSet;释放statement；释放conn。
+FastList:为避免用户只close conn，不close resultset、statement，在close conn时自动close resultset、statement。conn要跟踪创建的statement，放入ArrayList中，close时逆序将array中所有statement关闭。fastlist逆序查找，顺序删除。且保证不越界，不用检查index是否越界。
+ConcurrentBag:若用两个blocking queue实现连接池，idle、busy。getConn()从idle移到busy，closeConn()从busy移到idle。并发时锁影响性能。concurrentbag用threadlocal避免并发。
+    CopyOnWriteArrayList<T> sharedList;//所有db conn
+    ThreadLocal<List<Object>> threadList;//线程本地存储中的db conn
+    AtomicInteger waiters;//等待db conn的线程数
+    SynchronousQueue<T> handoffQueue;//分配db conn的工具
+
+    //创建db conn
+    void add(final T entry) {
+        sharedList.add(entry);
+        while (waiters > 0 && entry.getState() == STATE_NOT_IN_USE && !handoffQueue.offer(entry)) {//若有等待连接的线程，通过handoffQueue分配给等待线程
+            yield();
+        }
+    }
+
+    //获取db conn
+    T borrow(long timeout, TimeUnit tu) {
+        List<Object> list = threadList.get();//若线程threadlocal中有空闲conn，直接返回
+        for (int i = list.size()-1; i>=0;i--) {
+            Object entry = list.remove(i);
+            T bagEntry = weakThreadLocals ? ((WeakReference<T>) entry).get(): (T) entry;
+            if (bagEntry != null && bagEntry.compareAndSet(STATE_NOT_IN_USE,STATE_IN_USE)) return bagEntry;
+        }
+        
+        //线程本地无空闲conn，从共享队列获取
+        final int waiting = waiters.incrementAndGet();
+        try {
+            for(T bagEntry: sharedList) {
+                if (bagEntry.compareAndSet(STATE_NOT_IN_USE,STATE_IN_USE)) return bagEntry;
+            }
+            //共享队列无conn，等待
+            timeout = tu.toNanos(timeout);
+            do {
+                final long start = System.currentTimeMillis();
+                final T bagEntry = handoffQueue.poll(timeout, TimeUnit.NANOSECONDS);
+                if (bagEntry == null || bagEntry.compareAndSet(STATE_NOT_IN_USE,STATE_IN_USE)) return bagEntry;
+                timeout -= elapsedNanos(start);
+            } while (timeout > 10000);
+            return null;//超时未获取conn，返回null
+        } finally {
+            waiters.decrementAndGet();
+        }
+    }
+
+    //释放db conn
+    void requite(T bagEntry) {
+        bagEntry.setState(STATE_NOT_IN_USE);
+        for (int i=0; waiters.get()>0; i++) {
+            if (bagEntry.getState(STATE_NOT_IN_USE)|| handoffQueue.offer(bagEntry)) return;//若有等待线程直接分配，不进队列
+            else if ((i&0xff) == 0xff) parkNanos(MICROSECONDS.tonanos(10));
+            else yield();
+        }
+        
+        List<Object> threadlocallist = threadList.get();
+        if (threadlocallist.size()<50) {
+            threadlocallist.add(weakThreadLocals ? new WeakReference<>(bagEntry): bagEntry);
+        }
+    }
+
+其他并发模型：
+1.Actor：
+所有计算都在Actor中执行，Actor间不共享变量。内部包括一个mailbox放发送的消息，单线程处理。异步，不保证顺序，可靠。
+java Akka类库。spark、flink、play、erlang。
+2.软件事务内存 STM
+支持ACI。db MVCC在事务开启时打快照，本事务所有读写基于snapshot。若commit时，读写的数据在tx期间没有变化（通过version判断）则可提交，否则不能提交。类似stampedLock乐观锁。适合函数式语言，不变性。io很难回滚。
+java Multivserse类库。
+class VersionRef<T> {
+        final T val;
+        final long version;
+
+        public VersionRef(T val, long version) {
+            this.val = val;
+            this.version = version;
+        }
+    }
+
+    class TxnRef<T> {
+        volatile VersionRef curRef;
+        public TxnRef(T val) {
+            this.curRef = new VersionRef(val,0l);
+        }
+
+        public T get(Txn txn) {
+            return txn.get(this);
+        }
+
+        public void set(T val, Txn txn) {
+            txn.set(this,val);
+        }
+    }
+
+    interface Txn {//Txn用于事务内对数据的读写
+        <T> T get(TxnRef<T> ref);
+        <T> void set(TxnRef<T> ref, T val);
+    }
+
+    class STMTxn implements Txn {
+        static AtomicLong txnSeq = new AtomicLong(0);
+        Map<TxnRef, VersionRef> inTxnMap = new HashMap<>();//inTxnMap保存当前事务中所有读写的数据快照
+        Map<TxnRef, Object> writeMap = new HashMap<>();//writeMap保存当前事务需要写入的数据
+        long txnId;//全局唯一递增tx id
+
+        STMTxn() {//自动生成当前tx id
+            txnId = txnSeq.incrementAndGet();
+        }
+        @Override
+        public <T> T get(TxnRef<T> ref) {//获取当前事务中的数据
+            if (!inTxnMap.containsKey(ref)) {//将要读的数据加入intxnmap
+                inTxnMap.put(ref, ref.curRef);
+            }
+            return (T) inTxnMap.get(ref).val;
+        }
+
+        @Override
+        public <T> void set(TxnRef<T> ref, T val) {//在当前事务中修改数据
+            if(!inTxnMap.containsKey(ref)) {//先将要修改的数据放入intxnmap
+                inTxnMap.put(ref, ref.curRef);
+            }
+            writeMap.put(ref, val);
+        }
+
+        boolean commit() {
+            synchronized (STM.commitLock) {
+                boolean isValid = true;//是否有修改
+                for (Map.Entry<TxnRef, VersionRef> entry: inTxnMap.entrySet()) {
+                    VersionRef curRef = entry.getKey().curRef;
+                    VersionRef readRef = entry.getValue();
+                    if (curRef.version != readRef.version) {
+                        isValid = false;
+                        break;
+                    }
+                }
+                if (isValid) {//若所有数据都没有修改过，则本事务修改生效
+                    writeMap.forEach((k,v) -> {
+                        k.curRef = new VersionRef(v, txnId);
+                    });
+                }
+                return isValid;
+            }
+        }
+    }
+    
+    //使用
+        boolean committed = false;
+        while (!committed) {
+            STMTxn txn = new STMTxn();
+            action.run(txn);//业务逻辑
+            committed = txn.commit();
+        }
+
+3.协程 coroutine
+轻量级线程：用户态调度，切换成本低。栈小，几十K(java栈1M)。支持语言：golang、python、lua、kotlin。
+用于实现thread-per-message。异步转同步：java多线程io，用异步非阻塞，注册回调函数实现异步。协程可用同步非阻塞。OpenResty的cosocket。
+func hello(msg string) {xxx}
+main() {
+    go hello("hi");//在新协程中执行
+}
+
+4.CSP模型
+协程协作：共享内存方式（monitor、原子类，类似java）；消息传递CSP，避免共享。channel类似管道，生产者-消费者模型。
+与Actor对比：1)Actor无channel，mailbox对程序员透明，属于某特定actor。actor间可通信，不需中介。csp：对程序员可见，是通信的中介。2)actor发消息非阻塞，不保证100%可达。csp阻塞，保证可达，但可能死锁。
+
+
 
 1. 线程池
 线程开销：创建、销毁的时间开销；调度的上下文切换；内存（jvm堆中创建thread对象，os要分配对应的系统内存，默认最大1MB）
