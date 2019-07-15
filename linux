@@ -1,3 +1,45 @@
+1.命令
+passwd username:设置密码。useradd username -g group：创建用户并加入指定group，默认创建同名group。创建的用户放在/etc/passwd文件，其中包括username:x密码:userid:groupid:/home/username主目录:/bin/bash登陆后的默认交互命令行。
+安装软件：cenos用rpm，ubuntu用deb。下载安装文件后，deb -i xx.deb。查询：dpkg -l。more向后翻页，结束后回车返回。less可前后翻页，结束后q返回。删除：dpkg -r。 软件管家：apt-get search, install, purge。下载源：/etc/apt/sources.list文件。安装后，主执行文件在/usr/bin,或/usr/sbin，库文件在/var，配置在/etc。直接下载安装好的路径，解压缩：wget。tar -xvzf xx.tar.gz。配置环境变量:~/.bashrc文件，增加export JAVA_HOME=xxx， export PATH=$JAVA_HOME/bin:$PATH。
+运行：若mod中可x，通过./filename即可执行。若PATH中包括该路径，可filename运行。后台：nohup cmd &。停止：ps -ef | grep name | awk '{print $2}' | xargs kill -9。系统服务：systemctl start mysql启动，systemctl enable mysql设置开机启动，在/lib/systemd/system目录下创建xx.service配置文件，定义如何关闭、启动服务。
+关机：shutdown -h now。重启reboot。
+
+2.系统调用
+创建进程fork，将os各子系统为父进程创建的数据结构给子进程复制一份，再修改。给父进程返回子进程id，子进程返回0。根据返回值分支，子进程通过execve执行新程序。父进程可通过waitpid查看子进程是否执行完。init进程pid为1,是所有用户进程的父进程。
+进程内存空间：代码段。数据段。栈。堆：分配内存，brk（分配量小时，和原堆数据放在一起），mmap（分配量大时，重新划分）。
+文件系统：open，close，create，lseek，read，write。每个文件都分配file descriptor。
+异常中断处理：ctrl-c。kill函数。非法访问内存。硬件故障。sigaction，可注册信号处理函数。
+进程通信：消息队列：msgget 创建新队列，msgsnd 发送消息，msgrcv 读取消息。共享内存：交互信息较大。shmget 创建共享内存块，shmat 将共享内存映射到本进程内存空间，便于读写。竞争：semaphore。sem_wait 加锁sem-1，若<0则阻塞。sem_post 释放，唤醒。
+网络：tcp/ip协议栈，socket。
+
+glibc：开源标准c库，封装系统调用，提供用户态服务（string处理、数学运算等）。open()对应sys_open系统调用。printf()包括sys_open, sys_mmap, sys_write, sys_close。malloc(), calloc()， free等调用sys_brk。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 10.vim
 一般模式：移动光标，删除，复制，粘贴。i/o/a/r进入编辑模式。:/?进入命令行模式：查找、读取、保存、替换等。
 30->：向右移动30个字符。G：文件最后一行。gg：第一行。nG：第n行。:n1,n2s/word1/word2/gc: 在n1到n2行之间找word1,并替换为word2. nx：向后删除n个字符。dd：删一行。ndd：删n行。yy：复制一行。nyy。p：paste。u：复原前一个操作。ctrl-r：重做。.：重复前一个操作。:n1,n2 w [filename]：数据写入新文件。:r [filename]: 读入新文件。：sp：多窗口。
