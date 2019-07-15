@@ -7,6 +7,610 @@ Object.wait()、Thread.sleep()：wait释放资源，sleep不释放；wait需要�
 
 加锁时需要明确锁对象：synchronized func()：是对this加锁。synchronized static func()：是对A.class对象加锁。对同一对象加多个不同锁，相当于没加锁，编译优化时会去掉所有锁。临界区需要对多个对象加锁，需要定义private final Object lock = new Object()； synchronized(lock){}。
 
+管程monitor：与semaphore等价，管理共享变量及其操作，使其支持并发。1)用synchronized、wait、notify(all)实现。由编译器自动生成加锁、解锁代码，仅支持一个条件变量。2)用lock+内部condition。可支持多condition，但要自己加解锁。  互斥：monitor X将共享变量queue和enq()，deq()操作封装起来，要访问queue只能通过enq、deq，这两个操作保证互斥，入口等待队列保证只有一个线程进入。同步：条件变量A，B，每个条件变量都有一个等待队列。若线程T1条件A不满足，则A.wait()进入A的条件队列，允许其他线程进入monitor。当T2使T1条件满足后，T2调用A.notify()通知A队列的线程，T1出条件队列，到入口等待队列重新排队。 timeout参数：若没有T2 notify，T1 timeout后直接到入口等待队列重新排队检查条件。
+
+生命周期：通用：init(已创建但不能被分配cpu，如创建thread对象，但os还没创建对应的线程) -> runnable（t.start()后，os线程已创建，可分配cpu） -> running -> sleep（调用阻塞api，等待某事件，放弃cpu使用权） -> terminate（执行完，异常）. java：将runnable和running合并，细化sleep。new -> runnable -> (blocked,waiting,timed_waiting) -> terminated。线程等待synchronized隐式锁，进入blocked。调用阻塞api等io时仍为runnable。waiting：进入synchronized并调用Object.wait()；Thread.join()，T1调用T2.join()，T1进入waiting，等T2执行完，T1进入runnable；LockSupport.park()，当前T进入waiting，LockSupport.unpark(T2)，T2从waiting到runnable。timed_waiting：Thread.sleep(ms); synchronized中Object.wait(timeout)；LockSupport.parkNanos(ms)；LockSupport.parkUtil(ms)。terminated：执行完run()；stop()会杀死线程，不释放锁，Deprecated；interrupt()通知线程，T可通过捕获InterupttedException或isInterupted()主动检测，执行后续操作，如unlock()。
+
+线程数：cpu密集：#T=#cpu+1，当T缺页失效，或其他原因阻塞时，执行额外T。io密集：#T=[（IO时间/cpu时间）+1]*#cpu core  压测：根据初始值逐步增加，开始吞吐增加，延迟缓慢增加。T增加到一定值，吞吐开始下降，延迟迅速增加，此时为max thread。nginx用非阻塞io，多进程单线程，是io密集型，但进程数=#cpu core。
+
+并发策略：避免共享（利用thread本地存储，每个task分配独立thread）；不变模式（Actor模式、CSP模式、函数式编程）；monitor。
+
+logger.debug("info"+info);  => logger.debug("info:{}", info); 嵌套调用时先计算参数，再将参数压栈，再执行方法。{}占位符只压栈不计算。
+private final/static Object lock=new Object();不能用int/string，可能会变。且int会缓存-128-127间的值，string会缓存到常量池，会被重用，若其他线程也用到相同值，加锁不释放，则死锁。
+
+并发工具类：
+1.Lock：synchronized申请不到资源则阻塞，无法释放已有资源，不能破坏思索条件中的不可抢占。=》互斥锁：能响应中断（持有锁A的线程，再获取锁B失败，阻塞。发送中断信号，可唤醒线程并释放锁A）；可超时（若T一段时间没有获取锁B，不阻塞，返回error，也可释放锁A）；非阻塞获取锁（获取锁B失败，不阻塞，直接返回error）。避免不可抢占。即：Lock中的 lockInterruptibly() 可中断；tryLock(time)可超时；tryLock() 非阻塞。lock内部通过volatile state，happen-before规则保证变量的修改在锁释放后，一定能被其他T看到。
+可重入锁：持有锁的线程可重复获取该锁。公平锁/非：唤醒入口等待队列中的线程时，根据等待时间，先入先出。非公平锁不保证，锁被释放时，若有线程来获取锁，则直接获取，不用排队，默认。
+最佳实践：永远只在更新对象的成员变量时加锁;永远只在访问可变的成员变量时加锁;永远不在调用其他对象的方法时加锁。减少锁持有时间；减少锁粒度。
+系统停止响应，cpu利用率低，大概率死锁。
+2.condition：lock&condition实现的monitor中用await、signal(all)。synchronized实现的monitor用wait,notify(all)。
+
+class BlockedQueue<T> {
+    final Lock lock = new ReentrantLock();
+    final Condition notFull = lock.newCondition();
+    final Condition notEmpty = lock.newCondition();
+
+    List<T> list = new ArrayList<>();
+    int capacity = 10;
+
+    void enq(T x) {
+        lock.lock();
+        try {
+            while (list.size() == capacity) { //用while，线程被notify后需要重新进入monitor等待队列，从wait的下一句继续执行，等执行时需要再次判断condition是否依旧满足
+                notFull.await();
+            }
+            list.add(x);
+            notEmpty.signal();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    void deq() {
+        lock.lock();
+        try {
+            while (list.size() == 0) {
+                notEmpty.await();
+            }
+            list.get(list.size()-1);
+            notFull.signal();
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+
+3. 异步转同步：RPC调用：同步。但底层TCP是异步的，不等返回结果。rpc框架将调用方阻塞为timed_waiting。，如dubbo通过DefaultFuture.get()。
+class MyFuture {
+    private final Lock lock = new ReentrantLock();
+    private final Condition done = lock.newCondition();
+    Object response = null;
+
+    Object get(int timeout) { //调用方通过get()等待结果
+        long start = System.currentTimeMillis();
+        lock.lock();
+        try {
+            while (!isDone()) {
+                done.await(timeout);
+                long cur = System.currentTimeMillis();
+                if (isDone() || cur-start > timeout) break;
+            }
+        } finally {
+            lock.unlock();
+        }
+        if (!isDone()) throw new TimeoutException();
+        return response;
+    }
+
+    boolean isDone() {
+        return response != null;
+    }
+
+    void doReceived(Object res) { //rpc结果返回时调用
+        lock.lock();
+        try {
+            response = res;
+            if (done != null) done.signalAll();
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+
+4.semaphore ： PV原语。
+计数器、等待队列。通过init(), down(),up()原子方法访问。init设置初始值；down使其-1，<0时当前T阻塞；up +1,若counter<=0，唤醒等待队列中一个T，从队列中移出。  java.util.concurrent.Semaphore, 用acquire(), release()
+    int count;
+    final Semaphore s = new Semaphore(1);
+    void add() {
+        s.acquire();
+        try {
+            count+=1;
+        } finally {
+            s.release();
+        }
+    }
+用于允许多个线程访问临界资源，如connection pool。不能同时唤醒多个T竞争锁，只能唤醒一个。且没有condition，唤醒后的T直接运行，不检查临界条件。实现阻塞队列很麻烦。
+class MyPool<T,R> {
+    final List<T> pool;
+    final Semaphore s;
+    
+    MyPool(int size, T t) {
+        pool = new Vector<T>();//vector线程安全，不能用arrayList。多个线程进入临界区remove、add会并发。
+        for (int i =0; i < size;i++) {
+            pool.add(t);
+        }
+        s = new Semaphore(size);
+    }
+    
+    R exec(Function<T,R> func) { //利用pool中对象调用func
+        T t = null;
+        s.acquire();
+        try {
+            t = pool.remove(0);
+            return func.apply(t);
+        } finally {
+            pool.add(t);
+            s.release();
+        }
+    }
+}
+
+5.ReadWriteLock：读多写少。多线程同时读，只有一个线程写；若一个线程正在写，不允许读。
+
+    class Cache<K,V> {//cache与db的一致性问题：expire time；解析binlog，更新变化；MQ；双写。
+        final Map<K,V> map = new HashMap<>();//非线程安全
+        final ReadWriteLock lock = new ReentrantReadWriteLock();//优化：按key申请不同lock，减少冲突。
+
+        V get(K k) {
+            V v = null; 
+            lock.readLock().lock();//writelock支持newCondition()，readlock不支持
+            try {
+                v = map.get(k); //不支持在此处readlock升级为writelock，必须先释放readlock。只能降级。
+            } finally {
+                lock.readLock().unlock();
+            }
+            
+            if (v != null) {
+                return v;
+            }
+            
+            lock.writeLock().lock();//按需加载，加写锁后要再次检查，防止其他线程已经更新过
+            try {
+                v = map.get(k);
+                if (v == null) {
+                    //查询db得到kv
+                    map.put(k,v);
+                }
+            } finally {
+                lock.writeLock().lock();
+            }
+            return v;
+        }
+
+        void put(K k, V v) {
+            lock.writeLock().lock();
+            try {
+                map.put(k,v);
+            } finally {
+                lock.writeLock().unlock();
+            }
+        }
+    }
+
+6.StampedLock：写锁，悲观读锁，乐观读（无锁）。比ReadWriteLock读性能更好。不可重入。不支持condition。
+若线程阻塞在read/writelock，调用T.interrupt()，会导致cpu飙升。要中断用read/writeLockInterruptibly()
+    int x;
+    StampedLock s = new StampedLock();
+    
+    int add() {
+        long stamp = s.tryOptimisticRead(); //先乐观读，读完检查x是否被修改，若修改则升级为悲观读锁
+        int tmpx = x;
+        if (!s.validate(stamp)) {
+            stamp = s.readLock();
+            try {
+                tmpx = x;
+            } finally {
+                s.unlockRead(stamp);
+            }
+        }
+        tmpx++;
+        return tmpx; 
+    }
+7.CountDownLatch & CyclicBarrier
+用线程池时，主线程无法通过t1.join()等T1退出 =》CDL用于一个T等待多个T的场景。CB用于一组线程间互相等待。CDL计数器不能循环利用，减为0后，再有线程调用await()，直接通过。CB计数器可循环利用，减为0后自动重置为初始值。可设置回调函数。
+        Executor executor = Executors.newFixedThreadPool(2);//读订单、派送单并行，再串行执行process
+        while (存在未对账订单) {
+            CountDownLatch cdl = new CountDownLatch(2);
+            executor.execute(() -> { //启动线程池中的一个线程读取未对账订单
+                pos = getPOrders();
+                cdl.countDown();
+            });
+            
+            executor.execute(() -> {//启动线程池中的一个线程读取派送订单
+                dos = getDOrders();
+                cdl.countDown();
+            });
+            
+            cdl.await(); //等待线程查询结果结束
+            process(pos,dos);
+        }
+
+    Vector<P> pos;//订单、派送单队列，用于读取线程和处理线程传输数据
+    Vector<D> dos;
+    Executor executor = Executors.newFixedThreadPool(1); //1个线程处理队列消息，避免两个队列的读取错乱。使读订单、派送单，写process都并行
+    CyclicBarrier cb = new CyclicBarrier(2, () -> {//该回调由最后一个执行cb.await()的线程t1/t2执行，同步调用process()，再开始第二回合。若该回调由另一线程异步执行，则t1,t2可立即开启下一回合。
+        executor.execute(() -> process());
+    });
+        
+    void process(){
+        //回调函数
+        executor.execute(() -> {
+        P p = pos.remove(0);
+        D d = dos.remove(0);
+        process(p,d);
+
+    }
+                
+    void check() {
+        Thread t1 = new Thread(() -> {//线程不会反复创建，可不用线程池
+            while (存在未对账订单) {
+                pos.add(getPOrders());
+                cb.await();
+            }
+        });
+        t1.start();
+
+        Thread t2 = new Thread(() -> {
+            while (存在未对账订单) {
+                dos.add(getDOrders());
+                cb.await();
+            }
+        });
+        t2.start();
+    }
+ 
+ 8.并发容器
+ 容器：List、Map、Set、Queue。其中ArrayList、HashMap非线程安全。Collections类中提供包装类，可将所有方法加synchronized使其线程安全，称为同步容器。Vector、Stack、Hashtable不基于包装类，但也是基于synchronized实现，遍历时也需要加锁。 性能差。
+         List list = Collections.synchronizedList(new ArrayList());//包装类型为SynchronizedList
+        synchronized (list) {
+            Iterator it = list.iterator(); //用iterator遍历容器非线程安全，需要加锁。在Collections.synchronizedList中加锁的mutex就是this，所以可以用list加同一把锁
+            while (it.hasNext()) {
+                process(it.next());
+            }
+        }
+        
+ 并发容器：CopyOnWriteArrayList； ConcurrentHashMap, ConcurrentSkipListMap； ConcurrentSkipListSet, CopyOnWriteArraySet；BlockingDeque(LinkedBlockingDeque), BlockingQueue(ArrayBlockingQueue, LinkedBlockingQueue, SynchronousQueue, LinkedTransferQueue, PriorityBlockingQUeue, DelayQueue), ConcurrentLinkedQueue, ConcurrentLinkedDeque.
+ 
+CopyOnWriteArrayList：写时将共享变量复制一份，可无锁读。内部array指向数组，读基于array，写时要加锁，使写操作互斥，将array复制一份，在新数组更新，再将array指向它。适合写很少，且能容忍短暂读写不一致。Iterator只读，不能增删改，因为遍历的是快照。
+ConcurrentSkipListMap：key有序。ConcurrentHashMap：key无序。kv都不能为空。hashmap kv都可为null 非线程安全。treeMap k不能为null，v可null，非线程安全。hashtable、cskp、chp kv都不能为null，线程安全。hashmap 1.8以前，put会扩容，并发可能导致链表有环，cpu 100%。此时jstack查看方法调用栈会卡在hashmap的方法，或用dump线程栈分析。1.8后链表用红黑树可很大程度避免。
+Queue：阻塞vs非阻塞，队满入队阻塞，队空出队阻塞，blocking。单端vs双端，单端queue只能队尾入，队首出，双端deque两端都可出入。要考虑queue是否支持capacity有界，防止oom。
+单端阻塞队列：ArrayBlockingQueue 内部持有capacity数组，LinkedBlockingQueue 内部持有capacity链表，SynchronousQueue 内部无队列，生产者入队要等消费者出队，LinkedTransferQueue融合LinkedBlockingQueue和SynchronousQueue，性能更好。PriorityBlockingQUeue按优先级出队，DelayQueue 延时出队。
+双端阻塞队列：LinkedBlockingDeque
+单端非阻塞队列：ConcurrentLinkedQueue。双端非阻塞：ConcurrentLinkedDeque
+
+9.原子类
+互斥锁要加锁、解锁消耗性能，拿不到锁的线程进入阻塞状态，有线程切换开销。=》无锁：cas(memAddr,compareVal,newVal)。自旋：循环尝试。ABA问题：compareVal被其他线程多次更新又变成原值，更新对象可能改变属性。=》加递增version比较。性能好，无死锁问题，但自旋可能导致饥饿、活锁。但只有一个共享变量，多共享变量时用互斥锁。
+基本类型：AtomicBoolean,AtomicInteger,AtomicLong. 引用：AtomicReference, AtomicStampedReference, AtomicMarkableReference，后两个可解决ABA问题. 数组：AtomicIntegerArray, AtomicLongArray, AtomicReferenceArray. 累加器：DoubleAccumulator, DoubleAdder,LongAccumulator,LongAdder.累加更快，但不支持compareAndSet。 对象属性更新：AtomicIntegerFieldUpdater,AtomicReferenceFieldUpdater。基于反射，属性必须是volatile。
+
+10.线程池
+创建对象，jvm在堆里分配一块内存。创建线程，要调用os api，分配一系列资源，是重量级对象，应避免频繁创建、销毁。
+线程池设计：producer-consumer模式，使用者是prod，线程池本身是consumer 。
+ThreadPoolExecutor：corePoolSize 最小线程数，maximumPoolSize 最大，keepAliveTime&unit 若某线程空闲了该时间没有任务，则回收。workQueue。threadFactory 可自定义如何创建线程。handler 自定义任务拒绝策略，当所有线程都忙，且workqueue已满，可指定CallerRunsPolicy 由提交任务的线程去执行该任务，AbortPolicy 默认，抛出RejectedExecutionException，DiscardPolicy 丢弃，DiscardOldestPolicy 丢弃最老，并加入新任务。  通过execute()提交的任务，若在运行时异常，会导致线程终止，且无法捕获异常。所以要cathch RuntimeException、Throwable。
+Executors默认使用无界的LinkedBlockingQueue，易oom。
+给线程池默认名称：pool-1-thread-2。自定义设置名称：
+1)      ThreadPoolTaskExecutor pool = new ThreadPoolTaskExecutor();
+        pool.setThreadNamePrefix("myname");
+2)    class CustomThreadFactory implements ThreadFactory {
+
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread("myname");
+            return t;
+        }
+    } 
+ ThreadPoolExecutor pool = new ThreadPoolExecutor(100,120,TimeUnit.SECONDS,new LinkedBlockingQueue<>(), new CustomThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
+
+11.future
+ThreadPoolExecutor.execute()提交任务后无法获得返回值。Future<T> submit(Runnable/Callable)，其中Runnable无返回值，返回的future只能用于判断任务是否已完成，类似Thread.join()；Callable可通过call()获取返回值。Future接口提供：cancel()，isCancelled(), isDone()，阻塞 get(), get(timeout) .
+        ExecutorService executor = Executors.newFixedThreadPool(1);
+        Result r = new Result();
+        Future<Result> future = executor.submit(new Task(r), r);//Task implements Runnable，传入result对象，在run()中操作。可在主子线程间共享数据。
+        Result fr = future.get();
+
+FutureTask工具类：实现了Runnable、Future接口，可作为任务提交给ThreadPoolExecutor，或被Thread执行，也可通过get()获取结果.
+        FutureTask<Integer> ft = new FutureTask<Integer>(() -> 1+2);
+//        Thread t = new Thread(ft);
+        ExecutorService es = Executors.newCachedThreadPool();
+        es.submit(ft);
+        Integer result = ft.get();
+
+CompletableFuture:简化异步编程。4个静态方法，runAsync(Runnable，Executor) 无返回值, supplyAsync(Supplier<U>) get()返回值。默认用ForJoinPool线程池，创建线程数等于cpu核数，所有CompletableFuture共享同一线程池，若某些任务执行很慢的IO操作，会导致所有线程都阻塞在IO上，产生饥饿，要根据不同业务创建不同线程池。实现CompletionStage接口：描述任务间的时序关系，串行、并行、and汇聚、or汇聚。
+        CompletableFuture<Void> f1 = CompletableFuture.runAsync(() -> {dosth1;}); //不能获取结果
+        CompletableFuture<Void> f2 = CompletableFuture.supplyAsync(() -> {dosth2;}); //可获取结果
+        CompletableFuture<Void> f3 = f1.thenCombine(f2, () -> {dosth3;}); //将f1，f2执行结果汇聚
+
+CompletionService：批量执行异步任务。内部维护阻塞队列，任务结束后将结果的future对象加入队列。实现类ExecutorCompletionService。获取结果take()阻塞，poll非阻塞。
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        CompletionService<Integer> cs = new ExecutorCompletionService<Integer>(executor);
+        List<Future<Integer>> futures = new ArrayList<>();
+        futures.add(cs.submit(() -> getFrom1()));//异步从3个服务提供商获取结果，只要有一个返回结果即可。类似dubbo forking cluster。
+        futures.add(cs.submit(() -> getFrom2()));
+        futures.add(cs.submit(() -> getFrom3()));
+        
+        Integer r = 0;
+        try {
+            for (int i = 0; i < 3; i++) {
+                r = cs.take().get();
+                if (r != null) {
+                    break;
+                }
+            }
+        } finally {
+            for (Future<Integer> f: futures) {//取消其他异步线程
+                f.cancel(true);
+            }
+        }
+        return r;
+简单的并行任务，用线程池+future。若任务间有聚合关系，completableFuture。批量并行，用completionservice。
+
+12.fork/join：适合分治任务，fork分解，join合并。包括线程池ForkJoinPool，ForkJoinTask两部分。
+ForkJoinTask抽象类：fork() 异步执行子任务,join() 阻塞当前线程等子任务结果。抽象子类RecursiveAction，RecursiveTask，递归处理子任务，其抽象方法Action.compute()无返回值，Task.compute()有返回值。
+ForkJoinPool:内部有多个任务队列（deque），通过invoke/submit()提交任务时，根据一定路由规则提交到某一队列。若某任务执行时创建子任务，则放入当前线程的队列。若某workerThread队列为空，可从其他队列的另一端获取任务，
+    class Fibonacci extends RecursiveTask<Integer> {
+        final int n;
+        Fibonacci(int n) {
+            this.n = n;
+        }
+
+        @Override
+        protected Integer compute() {
+            if (n <= 1) return n;
+            Fibonacci f1 = new Fibonacci(n-1);
+            f1.fork();//异步执行子任务
+            Fibonacci f2 = new Fibonacci(n-2);
+            return f2.compute()+f1.join();//若用f1.fork,f2.fork，需要f2.join,f1.join，否则会有性能问题。若f1.join先于f2.compute，会先阻塞在join，等join完才compute，降低并行度
+        }
+    }
+
+        ForkJoinPool pool = new ForkJoinPool(4);
+        Fibonacci fib = new Fibonacci(30);
+        Integer result = pool.invoke(fib);
+
+
+并发设计模式
+1.Immutability：不变性。
+所有属性都设为final，只允许只读方法，final class不允许子类覆盖方法。若需要修改，则创建一个新不可变对象。如String、Long、Integer、Double。
+创建对象太多，浪费内存=》Flyweight pattern：对象池，创建新对象前先检查池中是否存在，不存在再创建并放入。Long内部维护static cache，缓存[-128,127]间的数字，在jvm启动时创建。
+final MyClass c; c不能修改，但c.field可以修改。
+2.copy-on-write：延时策略，当真正需要复制时才按需复制。
+适合对读性能要求高，读多写少，弱一致性场景。如os fork()，子进程不复制父进程整个地址空间，等父/子需要写入时才复制，使二者有独立地址空间。
+3.ThreadLocal：避免共享
+Thread类中有私有属性threadLocals，类型为ThreadLocalMap，其中key为ThreadLocal，value为该线程的数据。ThreadLocal内部不保存数据，可代理从Thread中获取数据。ThreadLocalMap对ThreadLocal的引用是weakReference，当Thread对象被回收时，ThreadLocalMap也能被回收。避免内存泄露。线程池中thread存活时间太长，导致ThreadLocal.map一直不被回收，且map.Entry对ThreadLocal是weakReference，故当ThreadLocal结束生命周期可被回收，但entry.value是强引用，不能被回收，导致内存泄露。=>try{}finally{}手动释放资源,threadlocal.remove()
+子线程无法继承父线程的threadlocal，要用InheritableThreadLocal
+    class TreadLocal<T> {
+        class Entry extends WeakReference<ThreadLocal> {
+            Object value;
+        }
+        
+        class ThreadLocalMap {
+            Entry[] table;
+            
+            Entry getEntry(ThreadLocal key) {
+                
+            }
+        }
+        
+        T get() {
+            ThreadLocalMap map = Thread.currentThread().threadLocals;
+            Entry e = map.getEntry(this);
+            return e.value;
+        }
+    }
+    class Thread {
+        ThreadLocal.ThreadLocalMap threadLocals;
+    }
+
+4.Guarded Suspension：等待唤醒，解决发送消息、处理结果的线程不是同一个
+    class GuardedObject<T> { //异步转同步
+        T obj;//受保护对象
+        final Lock lock = new ReentrantLock();
+        final Condition done = lock.newCondition();
+        final int timeout = 1;
+        final static Map<Object, GuardedObject> map = new ConcurrentHashMap<>();
+
+        static GuardedObject creat(K key) {
+            GuardedObject g = new GuardedObject();
+            map.put(key,g);
+        }
+        
+        static void fireEvent(K key, T obj) {
+            GuardedObject g = map.remove(key);
+            if (g != null) {
+                g.onChange(obj);
+            }
+        }
+        
+        T get(Predicate<T> p) { //获取对象
+            lock.lock();
+            try {
+                while (!p.test(obj)) { //检查条件是否满足，不满足则阻塞等待
+                    done.await(timeout, TimeUnit.SECONDS);
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            } finally {
+                lock.unlock();
+            }
+            return obj;
+        }
+
+        void onChange(T obj) {
+            lock.lock();
+            try {
+                this.obj = obj;
+                done.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+使用：
+        Message msg = new Message(id,content);
+        GuardedObject<Message> go = GuardedObject.create(id);//生成msg，并放入发送队列
+        send(msg);
+        Message res = go.get(t -> t != null); //阻塞等待返回结果
+
+        void onMessage(Message msg) { //当收到返回结果时，调用该回调函数，找到对应请求返回
+            GuardedObject.fireEvent(msg.id, msg);
+        }
+
+5.balking：多线程版本if，用互斥锁实现，可用双重检查优化性能
+    class AutoSaveEditor {
+        boolean changed = false;//判断文件是否被修改过
+        ScheduledExecutorService s = Executors.newSingleThreadScheduledExecutor();//单线程任务池
+
+        void startAutoSave() {
+            s.scheduleWithFixedDelay(() -> {
+                autoSave();//定时执行
+            },5,5,TimeUnit.SECONDS);
+        }
+
+        void autoSave() {
+            synchronized (this) {
+                if (!changed) {//双重检查
+                    return;
+                }
+
+                changed = false;
+                //执行save操作
+            }
+        }
+
+        void edit() {
+            synchronized (this) {
+                changed = true;
+            }
+        }
+    }
+
+6.thread-per-message模式：分工。
+http server在主线程接收请求，委托子线程异步处理。
+java线程与os线程一一对应，将线程调度权交给os，优：稳定、可靠，缺：创建成本高。=》线程池。另一方案：轻量级线程，go、lua。创建成本类似普通对象，速度快，内存小，可用来做thread-per-message。java轻量级线程fiber。
+
+7.worker thread模式：避免重复创建线程
+提交到相同线程池的任务要相互独立，不能有依赖关系，避免所有线程都阻塞，无法继续。
+任务异常处理。ThreadLocal内存写了问题。有界队列。
+
+8.两阶段终止：t1给t2发送终止指令;t2响应指令。
+t.interrupt()：从休眠转换到runnable，设置标志位。t在合适时机检查标志，退出run().
+pool.shutdown()/shutdownNow()。shutdown：拒绝接收新任务，等正在执行和队列中所有任务执行完，关闭线程池。shutdownNow：拒绝新任务，中断正在执行的任务，返回队列中不能执行的任务。
+
+9.生产者消费者：解耦。异步，平衡二者速度差异。批量执行。分阶段提交：如log4j2中appender，可异步刷盘，error立即刷，数据500条立即刷，5s内没刷过则立即刷。
+   class Logger {
+        final BlockingQueue<LogMsg> q = new LinkedBlockingQueue<>();
+        final int batchSize = 500;
+        ExecutorService s = Executors.newFixedThreadPool(1);//单线程刷盘
+        final LogMsg poisonPill = new LogMsg();//毒丸对象，producer要关闭时发送该对象，consumer读取消息，先判断，若是毒丸则自我销毁
+        
+        void start() {
+            File logfile = File.createTempFile("mylog",".log");
+            final FileWriter writer = new FileWriter(logfile);
+            s.execute(() -> {
+                flush();
+            });
+        }
+
+        void flush(File logfile, FileWriter writer) {
+            try {
+                int curIdx = 0;
+                long pretime = System.currentTimeMillis();
+                while (true) {
+                    LogMsg log = q.poll(5,TimeUnit.SECONDS);
+                    if (log != null) {
+                        if (poisonPill.equals(log)) break;
+                        writer.write(log.toString()); //先暂存到内存
+                        curIdx++;
+                    }
+                    if (curIdx <= 0) continue;//没有数据
+                    if (log != null && log.level ==ERROR || curIdx == batchSize || System.currentTimeMillis()-pretime>5000) {
+                        writer.flush();//刷盘
+                        curIdx = 0;
+                        pretime = System.currentTimeMillis();
+                    }
+                }
+            } finally {
+                try {
+                    writer.flush();
+                    writer.close();
+                } catch (Exception e) {
+
+                }
+            }
+        }
+    }
+
+框架：
+1.guava ratelimiter：匀速
+令牌桶算法token bucket：令牌以固定速率添加到桶中，若限流r/s，则令牌每1/rs产生一个。桶容量为b（允许的最大突发流量），若容量已满，则丢弃新令牌。请求通过limiter.acquire()获取令牌，否则阻塞。并发量很高时，定时器精度误差很大，guava不用定时器，记录并动态计算下一token发放的时间。支持warmup，初始流速r很小，但动态增长。
+漏桶算法leaky bucket：请求注入桶，按一定速率流出。
+class RateLimiter {
+        long tokens = 0;//当前桶中令牌数
+        long max = 3;//桶容量
+        long next = System.nanoTime();//下次令牌产生时间
+        long interval = 1000000000;//令牌发放间隔，ns
+
+        void acquire() {
+            long now = System.nanoTime();//申请令牌时间
+            long at = reserve(now);//预占令牌
+            long wait = Math.max(at-now,0);
+            if (wait>0) {
+                try {
+                    TimeUnit.NANOSECONDS.sleep(wait); //若尚无令牌发放，sleep等待
+                } catch (InterruptedException e) {}
+            }
+        }
+
+        synchronized long reserve(long now) {
+            resync(now);
+            long at = next;//可获取令牌的时间
+            long fb = Math.min(1,tokens);//桶中能提供的令牌数
+            long nr = 1-fb;//还需要多少令牌
+            next = next+nr*interval;//重算下一令牌发放时间
+            tokens -=fb;//重算桶中令牌数
+            return at;
+        }
+
+        void resync(long now) {//若请求时间在下一令牌产生时间之后，则重算令牌数，并将下一令牌发放时间置为当前时间
+            if (now>next) {
+                long newToken = (now-next)/interval;//新令牌数
+                tokens = Math.min(max, tokens+newToken);//新令牌加入桶中
+                next=now;//下一令牌发放时间为现在
+            }
+        }
+    }
+    
+    
+2.netty
+BIO模型：为每个socket分配一个线程（可用线程池），read、write会阻塞当前线程，直到io就绪。用于socket连接不很多的场景。=》server支持十万、百万连接，NIO：一个线程处理多个socket连接。
+reactor模式：Handle：IO句柄，即网络连接。EventHandler：事件处理器，提供handle_event()处理io事件，get_handle() 获取该io的handle。Reactor：register_handler/remove_handler 注册/删除事件处理器，handle_events() 通过Synchronous Event Multiplexer中的select()监听网络事件，事件就绪后，遍历handler处理。
+void Reactor::handle_events() {
+    //通过select()监听事件
+    select(handlers);
+    for (h: handlers) {
+        h.handle_event();
+    }
+}
+
+main中循环执行：
+while(true) {
+    handle_events();
+}
+Netty中EventLoop即Reactor。一个网络连接对应一个eventLoop，一个eventLoop对应一个thread，避免并发问题。一组eventLoop组成eventLoopGroup，BossGroup处理连接请求，WorkerGroup处理读写请求，通过负载均衡（轮询）交给具体eventLoop执行。eventLoop个数：2*cpu core
+其他优化：bytebuffer、0copy
+
+3.有界队列：disruptor
+jdk中的ArrayBlockingQueue,LinkedBlockingQueue基于reentrantLock，效率不高。=》disruptor：用于log4j、hbase、storm等。无锁算法避免竞争；优化cup性能。
+    class MyEvent {//自定义event
+        private long val;
+        public void set(long value) {
+            this.val = value;
+        }
+    }
+    
+    int bufferSize = 1024;//2^n
+    Disruptor<MyEvent> disruptor = new Disruptor<>(MyEvent::new, bufferSize, DaemonThreadFactory.INSTANCE);//根据EventFactory.newInstance()创建bufsize个MyEvent对象，地址连续
+    disruptor.handleEventsWith((event, sequence, endOfBatch) -> System.out.println(event));//事件处理
+    disruptor.start();
+
+    RingBuffer<MyEvent> buf = disruptor.getRingBuffer();//向ringbuffer中生产数据
+    ByteBuffer b = ByteBuffer.allocate(8);
+    b.putLong(0,10);
+    buf.publishEvent((event, sequence, buffer) -> event.set(b.getLong(0)), b);//写入数据不new，用set
+    
+内存用ringBuffer：初始化时创建全部数组元素,利用程序空间局部性原理，提升cache命中率；对象循环利用，避免频繁gc。ArrayBlockingQueue每增加一个元素，需要new Object，地址不连续。
+避免伪共享，提高cache命中率：ArrayBlockingQueue中int takeIndex,int putIndex,int count，cpu加载时可能会将三个都加载到同一cache line（64B），入队修改putIndex会导致其他线程的takeIndex cache失效，要重新从内存加载。且用锁保证出入队互斥。false sharing：由于cache line导致cache无效。=》每个变量前后填充56B，使其独占一个cache line。  false sharing可用@sun.misc.Contented，会占更多内存。
+无锁算法，避免加、解锁开销：入队不能覆盖未消费元素，出队不能读未写入元素。ringbuffer维护putindex，允许多个consumer同时消费，每个consumer一个takeindex，ringbuffer只维护最小的。入队：若没有足够空闲位置，用LockSupport.parkNanos()让出cpu x ns，再循环重新计算；否则用cas更新putindex。
+consumer可无锁批量消费。
 
 
 1. 线程池
