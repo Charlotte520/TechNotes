@@ -144,6 +144,8 @@ supervisor进程：按需启动worker进程。定时从zk检查是否有新topo�
 worker进程：构造spout、bolt task，启动executor线程。从zk获取task，构造，交给executor线程执行；zk写heartbeat；维持传输队列，将tuple传输给其他worker。
 zk：存储状态，nimbus和supervisor都是无状态的。
 
+11.rpc
+包括：数据格式；协议（data meta）；conn管理（连接池）；异步、超时；naming service、LB、组合访问。
 
 
 
