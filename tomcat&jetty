@@ -1,0 +1,16 @@
+1.http协议
+browser和server间约定好的通信格式。http请求包括request line、header、content。到达tomcat后，将byte[]stream解析为Request对象，封装了所有请求信息。由web应用处理，得到Response对象，tomcat将Response转成http response返回。response包括：status code，header，body。
+cookie：无状态->有状态。将用户id等信息存到browser本地文件，每次request header:cookie都包括，server可识别用户。安全隐患。
+session：用户信息存在server（redis），用sessionid标识。client将sessionid放入cookie。创建session：HttpServletRequest.getSession()。设置ttl，tomcat后台线程定期轮询删除。
+
+2.servlet容器
+http容器与业务解耦：业务接口：servlet。<--抽象类：GenericServlet，<--HttpServlet。业务继承HttpServlet，重写doGet(),doPost()。由servlet容器加载、管理。init(),service(ServletRequest req,ServletResponse res)（将req、res都作为输入，方便resposibility chain层层向下传递参数）,destroy(),getServletConfig(),getServletInfo()。spring mvc DispatcherServlet，在init创建spring容器。ServletConfig封装servlet初始化参数，web.xml中配置的参数。
+servlet容器：根据url和servlet映射关系，找到servlet，若尚未创建，则用反射加载并实例化，用servlet.init()初始化，调用servlet.service()。
+servlet注册到容器：目录规范，WEB-INF/classes,lib,web.xml。根据web.xml加载servlet。一个web应用对应一个ServletContext，其中持有多个servlet，这些servlet通过全局ServletContext共享数据，包括初始化参数、目录下的文件等。
+filter：干预过程，统一定制化处理req、res。多个filter链接成chain，从第一个filter.doFilter()，向后调用。如根据req freq限制访问，根据locale修改响应内容。spring intercepter：filter.doFilter() -> handlerIntecepter.preHandle() -> controller -> handlerIntecepter.postHandle() -> DispatcherServlet渲染view -> handlerIntecepter.afterCompletion() ->filter.doFilter()返回
+listener：基于状态，spring ContextLoadListener监听tomcat启动时触发的容器初始化事件，创建并初始化全局spring ioc容器，将其存储到spring的servletContext。DispachterServlet是前端控制器，用来转发、匹配、处理每个servlet请求。
+
+servlet容器：管理servlet生命周期。
+spring容器：管理spring bean生命周期。和spring mvc隔离管理不同的bean，通过父子关系，mvc可获取spring中的bean。通过配置指定各自管理的bean。
+spring mvc容器：管理spring mvc bean生命周期。servlet lazy loading，当第一个请求到达时，加载DispachterServlet，调用init()，创建spring mvc容器，持有mvc相关bean。并可通过servletContext拿到ioc容器，可访问ioc中的bean，但ioc不能访问mvc bean。即controller可访问service对象，但service不能访问controller。
+tomcat启动，对每个web应用，依次初始化：每个webapp都有一个classloader和servletcontext，扫描web.xml，找到filter、listener、servlet配置。若listener中有ContextLoaderListener，在servletContext初始化时，初始化ioc容器，（用synchronized init保证线程安全），管理spring bean，放入servletcontext。若servlet中有DispatcherServlet，第一次请求到达时，初始化mvc 容器，将ioc设置为root容器。
