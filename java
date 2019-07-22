@@ -1,3 +1,94 @@
+《java核心技术36讲》
+1.平台理解：
+语言特性，如泛型、lambda。基础类库，如collection、io/nio、网络、并发、安全。类加载机制。GC原理。JDK工具。
+1)write once,run anywhere 2)GC
+JRE提供运行环境，包括jvm、类库。JDK：JRE超集，提供更多工具，包括compiler、诊断工具。
+java是否解释执行？javac先编译为.class字节码，运行时jvm解释器转换为机器码。oracle hotspot JVM提供JIT编译器，运行时将热点bytecode编译为机器码，属于编译执行。故为编译和解释的混合模式：server 模式的jvm，收集上万次调用的信息进行高效编译，client 模式 1500次。hotspot内置两个JIT compiler，C1对应client模式，适合对启动速度敏感的桌面应用；C2对应server模式，适合长时间运行的server应用。默认采用分层编译。-Xint：只解释，不编译。-Xcomp：关闭解释器，由于JIT预热会导致jvm启动变慢。jdk9 AOT：ahead of time compilation，直接将bycode编译为机器码，避免JIT预热开销。
+
+2.Exception vs Error
+继承关系：Object <- Throwable <- Exception/Error。Throwable是可被catch或throw的基本类型，Exception是执行中可预料的意外，应该被catch并处理，Error是正常情况下不常出现的情况，会导致处于非正常、不可恢复状态，不需catch，如OutOfMemoryError。
+Exception分为checked和unchecked异常。checked必须在code中显示catch，由javac检查，如IOException。unchecked是运行时异常，如NullPointerException、ArrayIndexOutOfBoundsException，是代码逻辑可避免，是否catch都可以，编译器不强制。
+Error：LinkageError：包括NoClassDefFoundError、UnsatisfiedLinkError、ExceptionInitializerError。VirualMachineError：包括OutOfMemoryError、StackOverflowError。
+NoClassDefFoundError vs ClassNotFoundException：exception是当代码中用Class.forName, ClassLoader.loadClass, ClassLoader.findSystemClass动态加载类到内存时，若类及其依赖包不在classpath中，或该类已经被加载，但另一个classloader又试图从同一包中加载时。发生在从外存加载时。该动态加载由代码控制，应该被catch。error是new对象，该类在编译时存在，但运行时找不到定义。可能是打包时漏掉了部分类，或jar包损坏/篡改。发生在内存连接时。是jvm引起的，不应被catch。
+异常处理：尽量catch特定exception，而非通用的。不要swallow异常。e.printStackTrace()输出到std error，在生产环境很难找，改用errorlog。throw early：运行可能抛异常的代码前，先检查并抛异常，如Objects.requireNotNull(param)。catch late：若不知道如何处理，保留原cause，再抛出去，由上层业务处理。try-catch：会有额外性能开销，影响jvm优化，仅包住必要代码。不要用exception控制流程，他比if-else等低效。每实例化一个exception，要对当时stack快照，开销大。
+
+3.final、finally、finalize
+final：类/方法不能被修改，避免api修改基础功能，保证平台安全。变量/参数，保护只读数据，保证immutable，减少并发时的同步开销。但只能保证final引用不可变，若要对象也不可变，需要类支持。immutable类：final class；所有成员变量为private final，且无set()；构造器通过deep copy初始化，非直接赋值；若有方法可获取对象的内部状态，用copy-on-write，创建私有copy。
+finally：用于try-fanally, try-catch-fanally，保证资源必须释放，如lock、db conn。但若在try中return或exit，不会执行finally。也可用try-with-resources减少代码量。
+finalize：无法保证执行时机、执行是否符合预期，可能导致GC变慢、经过多个GC周期才能回收，导致死锁、挂起等。用System.runFinalization()也不可预测，回收时的异常会被swallow，程序无法感知。@deprecated。=》java.lang.ref.Cleaner：利用phantomReference，进行post mortem清理，比finalize轻量、可靠。且每个Cleaner的操作有独立线程运行，避免意外死锁。=》临时对象，用完置为null，加快gc。公用对象用资源池复用。用try-finally显式释放。
+
+4.强引用、弱引用、软引用、幻象引用：会影响对象的可达性状态、gc
+都是java.lang.ref.Reference的子类，提供get()返回原对象。
+strong：普通对象引用。当引用超出作用域，或置为null，可被回收。
+soft：oom前清理。用于内存敏感的cache：若有内存，保留cache。不足时清理。可和ReferenceQueue联合使用，若其引用的对象被gc，该ref加入refqueue，通过queue.poll检查对象是否被回收。
+weak：不能使对象豁免gc，提供一种访问在弱引用状态下对象的途径，构建无特定约束的关系 。如维护非强制的映射关系，若试图获取对象时还在，就使用他，否则重新实例化。如ThreadLocal。gc扫描时，不管内存是否够，也回收。也可配合RefQueue。
+phantom：不能通过他访问对象。对象被finalize后，可用于监控对象。必须配合RefQueue，gc回收某对象时，若还有phantom ref，将该ref加入queue。
+若将soft、weak引用的对象，赋值给strong引用，会改变其可达性状态。如 weakref被赋值给static变量，可能mem leak。
+
+5.String、StringBuffer、StringBuilder
+StringBuffer：通过synchronized保证线程安全，可修改。StringBuilder非线程安全。二者底层都是byte[]，初始16，若可以预估大小，可先设好，避免频繁扩容。继承AbstractStringBuilder，操作都相同。
+String.intern(str)：将str缓存，若已有直接返回。jdk6中缓存到perm gen，容易oom。jdk7放入heap,且perm gen用metaspace替代，更大。也可用-XX：+UseStringDeduplication，配合G1 GC，由jvm提供去重。
+String: char[]，char占2B，jdk9用byte[]+编码说明，减少空间。
+
+6.动态代理
+反射：直接操作类、对象，如obj.getClass()，获取类声明的属性、方法，运行时修改类定义。java.lang.reflect包中：Class、Field、Method、Constructor等，可用于操作类/对象。AccessibleObject.setAccessible(bool)，用于开发、测试、依赖注入框架。框架为保证通用性，要根据配置文件加载不同对象，调用不同方法。如ORmapping框架，为obj自动生成get、set，进行加载、持久化数据等。也可用于绕过api访问控制，如nio.DirectBuffer。
+动态代理：在运行时构建代理，实现动态的方法调用。用于rpc、aop。静态代理：rmi生成静态stub。每个业务类都要对于一个代理类，不灵活。动态代理：运行时生成代理对象，生成代理对象、调用代理方法要额外时间
+jdk proxy:基于反射，业务类必须实现接口。
+    interface MyInterface {
+        void fun();
+    }
+
+    class MyClass implements MyInterface {//被调用者要实现接口
+
+        @Override
+        public void fun() {
+            
+        }
+    }
+
+    class MyHandler implements InvocationHandler {
+        private Object target;
+        public MyHandler(Object t) {
+            target = t;
+        }
+
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            Object res = method.invoke(target, args);
+            return res;
+        }
+    }
+    
+    MyClass c = new MyClass();
+    MyHandler handler = new MyHandler(c);
+    MyClass proxy = (MyClass)Proxy.newProxyInstance(MyClass.class.getClassLoader(),MyClass.class.getInterfaces(), handler);
+    proxy.fun();
+
+cglib：基于asm，创建业务类的子类为代理类。性能高。
+aop：oop不适合跨对象分散的逻辑。如不同模块的特定阶段，处理log、用户鉴权、全局性异常处理、性能监控、事务等。
+
+7.int vs Integer
+primitive type：boolean、byte、short、char、int、long、float、double。包装类：包括一个private final int value字段存储数据（不可变），提供基本操作：计算、toString、valueOf。jdk可自动boxing/unboxing。Integer.valueOf()工厂方法，Flyweight模式，缓存-128~127间的值。
+auto boxing：语法糖。在编译阶段进行，使不同的写法在运行时等价。如Integer i=1; javac自动将int装箱替换为Integer.valueOf()，int unbox=i++；拆箱替换为Integer.intValue()。Boolean：缓存Boolean.TRUE,FALSE。Short:-128~127。Byte：全部都缓存。Character：’\u0000‘~'\u007F'。在性能敏感的场景，创建10w int和Integer的内存（obj header）、速度（primitive存的是值，obj存的是reference，再根据ref得到值的地址）都不是一个数量级，要避免无意中的boxing/un。但obj可generic，更抽象、解决业务的效率高。obj包括：header、instance、padding。header：16B，包括hashcode、lock标志、线程持有的锁、偏向线程id、gc分代年龄等；指向class meta的类型指针。instance存数据，包括父类继承和子类定义的。padding 8B填充。
+线程安全计数器：
+AtomicLong counter = new AtomicLong();
+counter.incrementAndGet();
+=》primitive type：
+volatile long counter;
+AtomicLongFieldUpdater<MyClass> updater = AtomicLongFieldUpdater.newUpdater(MyClass.class,"counter");
+updater.incrementAndGet(this);
+Integer：cache上限调整：-XX:AutoBoxCacheMax=N，在内部类IntegerCache static代码块中，根据vm参数设置high。通过SIZE,BYTES等常量，使不同平台数据长度相同。
+primitive：不能用于泛型。泛型在编译时将类型转为对应类型，必须要继承自Object。无法高效表达数据，如vector、tuple。
+
+8.vector、ArrayList、LinkedList
+vector：基于synchronized的线程安全动态数组，内部数组，扩容增加1倍。AL：非线程安全，扩容增加50%，手动缩容trimToSize()。LL：双向链表，非线程安全。可通过Collectins.synchronizedList(List<T> list)将其转为基于sync的线程安全容器。
+默认排序算法：Arrays.sort()，Collections.sort()将collection转为Object[],再用Arrays.sort()。对primitive数据，用dual-pivot quickSort。对象类型，用TimSort，归并+二分插入结合。parallelSort：基于fork-join，利用多core cpu。jdk9:List.of()不可变，不能扩容，更紧凑。
+
+
+
+
+
+
 java并发编程：
 分工：如何高效拆解任务并分配给线程 (Fork/Join)；同步：线程间如何协作 (CountDownLatch)；互斥：如何保证同一时刻只有一个线程访问共享资源(ReentrantLock)。
 为了提高CPU性能：cpu增加cache；OS增加进程、线程，分时复用cpu；编译器优化指令执行次序，更有效利用cache。=》问题：cache导致可见性、编译优化导致有序性、线程切换导致原子性 =》java内存模型：按需禁用cache、编译优化（volatile变量），synchronized。底层通过memory barrier强制将cache刷新到memory。
