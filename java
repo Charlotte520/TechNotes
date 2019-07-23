@@ -709,8 +709,8 @@ while(true) {
 Netty中EventLoop即Reactor。一个网络连接对应一个eventLoop，一个eventLoop对应一个thread，避免并发问题。一组eventLoop组成eventLoopGroup，BossGroup处理连接请求，WorkerGroup处理读写请求，通过负载均衡（轮询）交给具体eventLoop执行。eventLoop个数：2*cpu core
 其他优化：bytebuffer、0copy
 
-3.有界队列：disruptor
-jdk中的ArrayBlockingQueue,LinkedBlockingQueue基于reentrantLock，效率不高。=》disruptor：用于log4j、hbase、storm等。无锁算法避免竞争；优化cup性能。
+3.有界队列：disruptor 内存消息队列，用于线程间传递消息
+jdk中的ArrayBlockingQueue,LinkedBlockingQueue基于reentrantLock，效率不高。=》disruptor：用于log4j、hbase、storm等。无锁算法避免竞争；优化cpu性能。
     class MyEvent {//自定义event
         private long val;
         public void set(long value) {
@@ -728,10 +728,9 @@ jdk中的ArrayBlockingQueue,LinkedBlockingQueue基于reentrantLock，效率不�
     b.putLong(0,10);
     buf.publishEvent((event, sequence, buffer) -> event.set(b.getLong(0)), b);//写入数据不new，用set
     
-内存用ringBuffer：初始化时创建全部数组元素,利用程序空间局部性原理，提升cache命中率；对象循环利用，避免频繁gc。ArrayBlockingQueue每增加一个元素，需要new Object，地址不连续。
+内存用ringBuffer：循环顺序队列，增删元素时不用移动。初始化时创建全部数组元素,利用程序空间局部性原理，提升cache命中率；对象循环利用，避免频繁gc。ArrayBlockingQueue每增加一个元素，需要new Object，地址不连续。
 避免伪共享，提高cache命中率：ArrayBlockingQueue中int takeIndex,int putIndex,int count，cpu加载时可能会将三个都加载到同一cache line（64B），入队修改putIndex会导致其他线程的takeIndex cache失效，要重新从内存加载。且用锁保证出入队互斥。false sharing：由于cache line导致cache无效。=》每个变量前后填充56B，使其独占一个cache line。  false sharing可用@sun.misc.Contented，会占更多内存。
-无锁算法，避免加、解锁开销：入队不能覆盖未消费元素，出队不能读未写入元素。ringbuffer维护putindex，允许多个consumer同时消费，每个consumer一个takeindex，ringbuffer只维护最小的。入队：若没有足够空闲位置，用LockSupport.parkNanos()让出cpu x ns，再循环重新计算；否则用cas更新putindex。
-consumer可无锁批量消费。
+无锁算法，避免加、解锁开销：入队不能覆盖未消费元素，出队不能读未写入元素。ringbuffer维护putindex，允许多个consumer同时消费，每个consumer一个takeindex，ringbuffer只维护最小的。入队：先加锁申请n个空闲单元，写入数据时不加锁。若没有足够空闲位置，用LockSupport.parkNanos()让出cpu x ns，再循环重新计算；否则用cas更新putindex。出队：加锁申请可读单元，读取时不加锁。consumer可无锁批量消费。
 
 4.数据库连接池：HiKariCP
 标准步骤：通过data source获取db conn；创建statement；执行sql；通过resultSet获取result；释放resultSet;释放statement；释放conn。
