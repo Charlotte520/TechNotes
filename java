@@ -84,9 +84,39 @@ primitive：不能用于泛型。泛型在编译时将类型转为对应类型�
 vector：基于synchronized的线程安全动态数组，内部数组，扩容增加1倍。AL：非线程安全，扩容增加50%，手动缩容trimToSize()。LL：双向链表，非线程安全。可通过Collectins.synchronizedList(List<T> list)将其转为基于sync的线程安全容器。
 默认排序算法：Arrays.sort()，Collections.sort()将collection转为Object[],再用Arrays.sort()。对primitive数据，用dual-pivot quickSort。对象类型，用TimSort，归并+二分插入结合。parallelSort：基于fork-join，利用多core cpu。jdk9:List.of()不可变，不能扩容，更紧凑。
 
+9.hashtable, hashmap, treemap
+hashmap性能依赖于hashcode有效性：若equals相等，hashcode一定相等。重写hashcode，也要重写equals。内部Node<K,V>[] table + 链表。若链表长度>8，变成tree。构造函数只设置了capacity,loadFactor等初始值，没有对table初始化。在put()时，lazy load，若table为null，先resize()初始化table。放入新kv时，将hashcode高位移到低位异或，再&(n-1),忽略table容量以上的高位。若元素个数size>threshold，通过resize()扩容。threshold=loadFactor*capacity，默认为0.75*16。newThreshold=old<<1成倍增长。treefiBin()：当bin中节点数量（一边putval一边统计）>8时，若size<64，则resize扩容table。若size>64，进行树化改造。 可通过Collections.synchronizedMap()使其线程安全。
+LinkedHashMap：kv维护双向链表，根据插入顺序遍历。也可根据访问顺序，实现LRU cache。
 
+10.线程安全集合
+ConcurrentHashmap：分段锁 + volatile value + CAS。Segment[]继承ReentrantLock，数量与entry一致，不再使用。初始化table，用volatile sizeCtl互斥，若发现有线程正在修改，Thread.yield()自旋等待，否则用cas修改sizeCtl，创建table。put(k,v)时，若entry为null，cas放入，否则用synchronized加锁，遍历链表数据，替换或增加新节点到链表中，若链表长度>8，变红黑树。size()，用LongAdd分别算不同entry元素个数，再求和。
 
+11.io
+java.io：File抽象、Input/OutputStream（读写字节）、Reader/Writer(读写字符，加入字符编解码功能)、BufferedOutputStream（带缓冲区，flush时批处理）等。基于stream模型，同步、阻塞。java.net:Socket,ServerSocket,HttpURLConnection。
+nio：channel（文件描述符，可通过DMA将数据在网卡和buffer中复制），selector（多路复用，检测注册其上的多个channel是否就绪，实现单线程对多chennel的管理，基于linux epoll），buffer（数据容器），多路复用、同步非阻塞io。
+aio：基于事件、回调的异步io。
+file copy：内核态将数据从磁盘dma读到内核缓存，再切换到用户态，cpu将数据从内核缓存读取到用户缓存。nio transferTo：不需用户态参与，0copy。Files.copy()：用native方法实现用户态拷贝，不经过内核态。
 
+12.synchronized
+提供三种不同monitor实现：biased lock、轻量级锁、重量级锁。jvm检测到不同竞争状况，自动切换到对应锁实现，升级/降级。若无竞争，用biased，用cas在obj header中mark word设置threadId，表示该obj现在偏向当前线程。若有线程试图锁定已被偏斜过的obj，jvm撤销biased lock，切换到轻量锁。通过cas mark word试图获取锁，若成功则使用轻量锁，否则升级到重量锁。jvm进入safe point时，检查是否有闲置的monitor，降级。
+自旋锁：while(true)+cas，竞争锁失败的线程，在os层面不真正挂起等待，jvm让线程做几个空循环等待（假设很快就能获取锁），若几次循环后能获取则进入临界区，否则os挂起。可减少线程阻塞，适合锁竞争不激烈、占用时间短的场景。但自旋会占用cpu。
+
+13.死锁
+jstack：获取线程栈，定位线程间的依赖关系。区分线程状态，查看waiting目标，对比monitor等持有状态。重启。
+原因：互斥；不可抢占；循环等待。解决：一次性加锁；按顺序加锁；指定锁超时，得不到锁有相应退出逻辑。ReentrantLock.tryLock()：若对象恰好没加锁，直接获取锁。非公平插队。
+若某线程死循环，占用锁，导致其他线程饥饿。可先找到占用cpu最多的线程，再jstack其线程栈，排查代码。
+
+14.juc
+CountDownLatch：线程A等其他线程完成后才执行。不可重置。countDown/await。调用await的线程阻塞等countDown为0。操作的是事件。
+CyclicBarrier：一组线程互相等待至某状态，再同时执行。await，当所有线程都await达到某值，才继续并自动重置。操作的是线程。用于等并发线程结束。
+Semaphore：限制多个同时工作的线程数。acquire，release。
+为什么没有ConcurrentTreeMap？有序时用ConcurrentSkipListMap。TreeMap基于红黑树，插入/删除节点时要平衡操作，并发时很难控制粒度。SkipList通过层次提高效率，但便于并发控制。
+ConcurrentLinkedQueue：concurrentxx基于cas+aqs，lock-free，吞吐较高。若遍历时发生修改，抛出ConcurrentModificationException，停止遍历。copyonwritexx：修改开销重，适合读多写少场景。遍历时若容器已修改可继续。size()不一定准确。
+LinkedBlockingQueue：基于putlock+takelock+condition(not full/empty)，锁粒度比array细，并提供阻塞等待。有界。ArrayBlockingQueue。空间更紧凑。lock+putindex+takeindex。
+线程池：Executors：提供各种静态工厂方法。newCachedThreadPool，处理大量短时间任务，内部用SynchronousQueue，先缓存thread并重用，若无thread，创建新worker thread，若thread>60s没有task，终止并移除cache。newFixedThreadPool，指定最多的#thread num，无界队列。newSingleThreadExecutor，worker thread1个，无界队列，保证任务按顺序执行。newSingleThreadScheduleExecutor，newScheduledThreadPool，创建ScheduledExecutorService，可定时/周期性调度。newWorkStealingPool，内部创建forkJoinPool，并行处理任务，不保证顺序。
+Executor接口提供：execute(Runnable)提交任务。ExecutorService接口：继承Executor，并提供Future<T> submit(Callable<T>)，可获取返回值。实现类：ThreadPoolExecutor，ScheduledThreadPoolExecutor，ForJoinPool。
+AtomicInteger：unsafe.cas() + volatile int value。业务代码如何cas：AtomicLongFieldUpdater<MyClass>，基于反射创建，AtomicLongFieldUpdater.newUpdater(MyClass.class, "fieldName")。用updater.compareAndSet(this, oldval, newval)。cas：适合短暂竞争，重试少的场景。否则要限制自旋次数，减少cpu消耗。ABA问题：用AtomicStampedReference，为对象引用增加stamp，保证cas正确。
+AQS：AbstractQueuedSynchronizer。volatile int state 表示状态，FIFO等待线程队列(Node组成的双向链表)，cas基础操作方法，子类实现acquire/release。子类如ReentrantLock, Worker：通过state反应锁的持有情况。
 
 
 java并发编程：
