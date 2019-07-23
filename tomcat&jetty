@@ -14,3 +14,21 @@ servlet容器：管理servlet生命周期。
 spring容器：管理spring bean生命周期。和spring mvc隔离管理不同的bean，通过父子关系，mvc可获取spring中的bean。通过配置指定各自管理的bean。
 spring mvc容器：管理spring mvc bean生命周期。servlet lazy loading，当第一个请求到达时，加载DispachterServlet，调用init()，创建spring mvc容器，持有mvc相关bean。并可通过servletContext拿到ioc容器，可访问ioc中的bean，但ioc不能访问mvc bean。即controller可访问service对象，但service不能访问controller。
 tomcat启动，对每个web应用，依次初始化：每个webapp都有一个classloader和servletcontext，扫描web.xml，找到filter、listener、servlet配置。若listener中有ContextLoaderListener，在servletContext初始化时，初始化ioc容器，（用synchronized init保证线程安全），管理spring bean，放入servletcontext。若servlet中有DispatcherServlet，第一次请求到达时，初始化mvc 容器，将ioc设置为root容器。
+
+3.tomcat 架构
+核心功能：处理socket连接，网络字节流与Request、Response对象的转化；加载、管理servlet应用，处理request请求。=》connector 对外交流；container 对内处理。多connector：1container，通过ServletRequest/Response通信。两者封装为service，每个service映射到不同port提供服务。一个tomcat server实例可包含多个service，每个service中有多个connector和一个container。
+connector：支持的io模型有nio，aio，apr。应用层协议有http1.1，http2.0，ajp。具体功能：监听port；接收网络请求；读取字节流；根据应用层协议解析字节流，生成TomcatRequest对象；将TomcatRequest对象转换为ServletRequest对象；调用servletContainer，得到ServletResponse；将ServletResponse转为TomcatResponse对象；转为字节流；根据协议写回响应。=》网络通信：Endpoint；协议解析：Processor；TomcatRequest/Response与ServletRequest/Response转化：Adapter。io模型和协议组合，用ProtocolHandler封装。
+Endpoint，实现tcp/ip协议，输出字节流给processor。包括Acceptor监听socket连接请求，SocketProcessor处理socket请求（Runnable）。在run()中调用processor处理。线程池。
+Processor，实现http协议，输出TomcatRequest，调用Adapter.service()。
+Adapter，提供ServletRequest给container。使connector和servlet container解耦。
+
+层次container：灵活，Engine -> Host -> Context -> Wrapper。composite模式，都实现Container接口，提供getParent，setChildren等方法。wrapper表示一个servlet，多个wrapper组合为context。context代表web应用。host代表虚拟主机/站点，每个host可有多个web应用。engine管理多个host，一个service只能有一个engine。server.xml。由Mapper更具url将定位请求由哪个servlet处理，其中保存了server.xml、web.xml中的配置，如host配置的域名，context配置的webapp路径，wrapper配置的servlet路径。整个调用过程由Adapter触发，connector.getService.getContainer.getPipeline.getFirst.invoke()。通过pipeline-valve责任链处理，valve是一个处理点，提供invoke(),包含对next valve的引用，自己处理完后getNext.invoke()。pipeline用于管理valve链表，最后一个valve节点为basicValve，负责调用下一层pipeline的第一个valve。wrapper的最后一个valve创建filter链，调用doFilter(),最终调用servlet.service()。valve是tomcat私有机制，与tomcat架构和api相关，filter是servlet api公有的标准。valve工作在web container级别，拦截所有应用请求。filter工作在应用级别，仅拦截某web app的请求。热部署：web应用部署信息变化，mapper映射也要变化，MapperListener。
+
+LifeCycle:init,start,stop,destroy。container继承该接口。每个组件各自实现。父组件init中，需要调用子组件的init创建子组件。通过server.start()即可启动所有组件。但每个组件的启动方法复杂多变，如何将不同组件的创建解耦：observer。将组件的生命周期定义为一个个状态，状态转变定义为事件。即在Lifecycle中增加方法：add/removeListener()，并包含对LifecycleEnum的引用。LifecycleBase为抽象类，继承Lifecycle，实现了接口中所有方法，并定义了抽象方法由子类实现，template模式。进行状态转变与维护、事件触发、listener维护。子类再去实现自己的init、start、stop。如何注册listener：tomcat自定义的listener，父组件创建子组件时，注册到子组件。用户自定义，在server.xml中配置，tomcat启动时解析。
+
+/bin/start.sh：启动jvm运行BootStrap类，初始化tomcat classloader，并创建catalina。->Catalina类解析server.xml，创建相应组件，调用server.start() -> server管理service组件，调用service.start() -> service管理connector和engine，调用两者的start()。Server用数组保存service组件，动态扩容。ContainerBase用HashMap保存子容器。
+
+
+
+
+
