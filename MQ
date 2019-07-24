@@ -1,4 +1,35 @@
 《kafka》
+8.集群参数
+broker:log.dirs。可挂载到不同物理磁盘，提升读写性能，故障转移（1.1前任一磁盘挂掉会关闭整个broker，1.1后将坏磁盘数据自动转移到其他正常磁盘，broker正常）。zookeeper.connect。listeners：外部连接者通过什么协议访问指定host:port的kafka服务。auto.create.topic.enable:false。若producer启动时写错了topic，会自动创建。auto.leader.rebalance.enable=false。
+topic：保留时间，retention.ms：默认7d。retention.bytes:最大磁盘。max.message.bytes：能接收的最大消息。
+jvm：heap 6GB。gc：若cpu充足用cms，否则用吞吐量收集器。jdk8用g1，full gc少。
+os：fd限制，ulimit -n。swap：较小值，若为0,物理内存耗尽时oom，os会随机选一个进程kill，若设为较小值，容易观测到broker性能急剧下降。提交时间/flush落盘时间：数据写入os page cache即可认为成功，根据LRU定期（5s）写入磁盘，但flush前的数据可能丢失，由于有多副本，可以容忍。
+
+9.producer partition
+负载均衡，高伸缩性，partition内部消息顺序性。
+分区策略：partition.class，实现Partitioner接口，partition(),close()。轮询；key-ordering，按key.hashcode%#partitions；根据ip的geo-location。
+
+10. producer compression
+message：v1每条msg都有CRC校验，v2为msg set进行CRC校验。V1每条消息压缩，v2对整个msg set压缩，效率更高。
+producer配置：compression.type，启用对应压缩算法，类型记录到msg set中。节省网络带宽和broker磁盘，在consumer解压缩。但若broker和producer压缩算法不同，broker会先解压缩，再用自己的压缩算法重新压缩。或broker发生消息格式转化，也会解压缩，且丧失0copy特性。
+
+11.无消息丢失
+已提交消息：若干broker成功收到并写入log。用producer.send(msg，callback)带回调的异步发送，acks=all，所有replica都收到消息才成功。retries自动重试设置较大值。unclean.leader.election.enable=false，当leader挂掉，落后太多的follower不能成为leader。replication.factor>=3。min.insync.replicas>1，消息至少写入几个replica。 enable.auto.commit=false
+
+
+12.producer 拦截器
+interceptor.classes：实现ProducerInterceptor接口，onSend()发送前调用,onAck()发送成功或失败调用，在callback前，与onsend不在同一线程，注意共享变量的线程安全问题。ConsumerInterceptor接口，onConsume()消息处理前,onCommit()提交offset后。
+
+13.producer tcp
+tcp多路复用请求：将多个数据流合并到底层单一物理连接。即在一条物理连接上创建多个虚拟连接，每个连接负责各自对应的数据流。
+建立连接：new KafkaProducer()时，后台创建sender线程，建立与bootstrap.servers中配置的broker的连接。一般配3~4台，连接到任一broker后可得到整个集群的broker信息。再向某台broker发metadata请求。若发现与某些broker当前没有建立连接，则创建。send()时，若发现目标broker没有建立连接，创建。metadata.max.age.ms定期更新meta。
+关闭连接：主动关闭producer.close()；被动由broker关闭，connections.max.idle.ms=9min，若9min内该conn没有数据，则broker端关闭。producer会产生close_wait连接，无法显式观测到连接中断。
+
+14.producer 幂等 & 事务
+默认at least once。
+幂等producer：props.put("enable.idempotentce",true)。broker多保留一些字段，当收到有相同字段的消息时，自动去重。只能保证partition内去重，单session内去重，重启producer会失效。
+多partition、多session去重：事务。read commited级别，可将多消息原子写入多个partition，且consumer只能看到commit成功的消息。设置enable.idempotentce，和producer transactional.id。producer.initTransaction(); producer.beginTransaction(); producer.send(msg); ... producer.commitTransaction();/abort。consumer端：read_commited。broker通过2pc，通过transactional coordinator完成。性能问题。
+
 15.consumer group
 可扩展、容错的consumer机制，有多个consumer实例，可多进程/多线程。#consumer=#partition。
 
@@ -17,8 +48,10 @@ rebalance时机：group member变化；topic变化；partition变化。=》后�
 18.consumer offstet commit
 记录下一条消息的offset。
 enable.auto.commit=true，consumer后台自动提交，提交间隔：auto.commit.interval.ms,默认5s。在每次开始调用poll()时，先提交上次poll()的最新offset。可保证不丢，但可能重复：若两次commit间，发生rebalance。所有consumer从上次commit offset开始消费，则两次commit间的数据会重复。
-手动提交：enable.auto.commit=false。且consumer.commitSync()，同步提交consumer.poll()得到的最新offset，阻塞直到broker返回结果。consumer.commitAsync(offset，callbackhandler)异步commit，异常时不能重试。=》组合：先async提交避免阻塞，在consumer.close()前，sync commit保证offset正确。若一次poll很多消息，可在consume期间commit offset。
+手动提交：enable.auto.commit=false。且consumer.commitSync()，同步提交consumer.poll()得到的最新offset，阻塞直到broker返回结果。若有瞬时错误，会自动重试。consumer.commitAsync(offset，callbackhandler)异步commit，异常时不能重试。=》组合：先async提交避免阻塞，在consumer.close()前，sync commit保证offset正确。若一次poll很多消息，可在consume期间commit offset。
 
+19.CommitFailedException
+调用consumer.commitSync()时，1)若commit期间，consumer group开始rebalance，且将要commit的parition分配给其他consumer。2)consumer处理时间太长，耽误了poll()。=》增加max.poll.interval.ms，或减少每次poll的消息数max.poll.records，或缩短单条消息处理时间，或下游多线程加速消费（如何多线程commit？）。3)不同consumer group的group.id冲突
 
 
 
