@@ -1,3 +1,28 @@
+《kafka》
+15.consumer group
+可扩展、容错的consumer机制，有多个consumer实例，可多进程/多线程。#consumer=#partition。
+
+16. _consumer_offsets topic
+老版本consumer offste提交到zk。但zk不适合高频写。=》存到offset topic。消息格式：key：<consumer_groupid ,topic,partition>，value：offset，时间戳，用户自定义数据等。可用于删除过期offst等操作。其他消息：保存consumer group信息的消息（注册consumer group时）；删除group过期offset的消息，或删除group的消息（delete mark，当consumer group下所有consumer都停止了，且offst数据已被删除，kafka写入该消息，彻底删除该group的消息）。
+创建：集群启动第一个consumer程序时。分区数：offsets.topic.num.partitions=50，replica=3。
+删除过期offset：compaction。后台线程log cleaner，定期扫描log的所有消息，同一key的不同消息，取发送时间最新的，其他为过期，删除。
+
+17.consumer group rebalance
+一个group下所有consumer，通过coordinator，就如何消费partition达成共识。此过程中，所有consumer都不能消费。
+coordinator：每个broker都有coordinator组件，为consumer group执行rebalance，提供offset管理，group member管理。consumer commit offset是通过coordinator所在broker提交。consumer启动时向coordinator broker发请求，进行注册、管理member等meta。consumer group如何确定coordinator所在broker？先根据groupid%50得到partitionid，找到该partition leader所在broker。
+rebalance缺点：停止consumer；慢；不考虑局部性，效率低。Sticky assigner：尽可能保存之前分区方案。
+rebalance时机：group member变化；topic变化；partition变化。=》后两者不可避免，如何避免member变化？启动一个group.id为当前group的consumer，发请求给coordinator，加入，rebalance。为了增加tps，不可避免。减少：consumer在session.timeout.ms=10s没有发送heartbeat给coordinator，发送间隔为heartbeat.interval.ms，一般timeout是interval>3倍。检查consumer是否因gc超时。
+
+
+18.consumer offstet commit
+记录下一条消息的offset。
+enable.auto.commit=true，consumer后台自动提交，提交间隔：auto.commit.interval.ms,默认5s。在每次开始调用poll()时，先提交上次poll()的最新offset。可保证不丢，但可能重复：若两次commit间，发生rebalance。所有consumer从上次commit offset开始消费，则两次commit间的数据会重复。
+手动提交：enable.auto.commit=false。且consumer.commitSync()，同步提交consumer.poll()得到的最新offset，阻塞直到broker返回结果。consumer.commitAsync(offset，callbackhandler)异步commit，异常时不能重试。=》组合：先async提交避免阻塞，在consumer.close()前，sync commit保证offset正确。若一次poll很多消息，可在consume期间commit offset。
+
+
+
+
+
 RabbitMQ：高并发、高吞吐、性能高；后台管理界面；集群化、高可用部署、消息高可靠；实践多、社区活跃。缺点：erlang开发，难改造。有broker的复杂路由：exchange：根据复杂的业务规则将msg路由到不同queue。queue：exchange向一个queue写msg，多个consumer消费该queue，但每条msg只能给一个consumer。pub/sub：每个consumer一个queue，绑定到exchange。若某consumer只消费某类数据，exchange可将带xx前缀的msg发到该queue。吞吐比kafka低一个数量级。适合不同业务系统要复杂消息路由的场景。eg.A发10条msg，3条给b，7条给c。
 RocketMQ:高并发、高吞吐、分布式事务。
 kafka：消息中间件的功能少，优化吞吐。适合高吞吐的日志采集、数据同步、实时计算，几十万/百万/s。结合storm、spark streaming等。有broker的暴力路由：生产消费模型用简单的数据流模型，producer向topic写数据，分成多个partition，消息发到某个partition。消费时，每条消息只发给consumer group中的一个consumer，即partition：consumer=*：1，形成queue。publish/subscribe模型：生产者的每条消息要让所有consumer消费，使每个consumer一个group，订阅相同topic。
@@ -14,6 +39,7 @@ kafka：消息中间件的功能少，优化吞吐。适合高吞吐的日志采
 若数据写入leader，但还没同步到follower，leader宕机：每个partition至少有1个follower在isr列表；写入时，要求leader和至少一个follower写入成功，否则写入失败重试。
 ISR：每个partition对应一个isr列表，包括leader+与leader同步的follower。若某follower没及时同步（如JVM GC等），out of sync，移出isr。
 Producer ACK：0，只要prod发送成功就认为成功，即使没有在leader落盘,有可能丢。1,leader写入磁盘，不管其他follower有没有同步成功，就认为成功，默认。当leader挂掉，follower还没同步，可能丢。all，leader落盘，且ISR中的follower都同步成功才成功。若isr只有一个leader，没有follower仍可能丢。
+
 
 2. 如何设计消息中间件
 存储：内存 or 磁盘？先写内存做缓冲，每隔几秒刷入磁盘。磁盘文件拆分规则。磁盘文件meta：数据offset、id。数据量增大，分片，扩容。
