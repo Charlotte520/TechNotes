@@ -14,6 +14,9 @@ passwd username:设置密码。useradd username -g group：创建用户并加入
 
 glibc：开源标准c库，封装系统调用，提供用户态服务（string处理、数学运算等）。open()对应sys_open系统调用。printf()包括sys_open, sys_mmap, sys_write, sys_close。malloc(), calloc()， free等调用sys_brk。
 
+3.进程&线程
+虚拟地址空间：32位系统：高地址1G，内核空间（task_struct）。低地址3G：代码区，数据区，堆（低向高增长），共享库与mmap内存映射区，栈（高向低增长），环境变量。cpu在用户态下执行用户程序，访问用户空间内存，使用用户空间栈，若有系统调用，cpu切换到内核态，执行内核代码，可访问全部内存，使用内核栈。mmap()：将文件内容映射到该区域，用户可读写该内存修改文件，而不用read/write系统调用，节省用户空间与内核空间的数据拷贝。java MappedByteBuffer。线程有自己的task_struct和栈，其他与进程共享。
+阻塞&唤醒：阻塞时将线程的task_struct移出running queue，加入blocked queue，并向内核注册callback，状态设置为TASK_INTERRUPTIBLE/UN。从runnable queue调度下一线程。当等待事件出现，内核调用callback唤醒线程，将task_struct从blocked queue移到runnable queue，状态为runnable。若有数据，从内核拷贝到用户堆。
 
 
 
