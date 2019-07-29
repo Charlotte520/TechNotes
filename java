@@ -118,6 +118,12 @@ Executor接口提供：execute(Runnable)提交任务。ExecutorService接口：�
 AtomicInteger：unsafe.cas() + volatile int value。业务代码如何cas：AtomicLongFieldUpdater<MyClass>，基于反射创建，AtomicLongFieldUpdater.newUpdater(MyClass.class, "fieldName")。用updater.compareAndSet(this, oldval, newval)。cas：适合短暂竞争，重试少的场景。否则要限制自旋次数，减少cpu消耗。ABA问题：用AtomicStampedReference，为对象引用增加stamp，保证cas正确。
 AQS：AbstractQueuedSynchronizer。volatile int state 表示状态，FIFO等待线程队列(Node组成的双向链表)，cas基础操作方法，子类实现acquire/release。子类如ReentrantLock, Worker：通过state反应锁的持有情况。
 
+23.类加载
+加载、链接、初始化。load：从.jar、.class中读取ClassFile，可能ClassFormatError。link：验证，可能VerificationError；准备，为类/接口中的静态变量分配空间；解析，将常量池中的符号引用转为直接引用。init：静态字段赋值，执行static{}。
+parent delegation model：bootstrap加载jre/lib下的jar。Extention：加载jre/lib/ext下的jar。application：加载classpath。
+
+24.运行时动态生成java类
+
 
 java并发编程：
 分工：如何高效拆解任务并分配给线程 (Fork/Join)；同步：线程间如何协作 (CountDownLatch)；互斥：如何保证同一时刻只有一个线程访问共享资源(ReentrantLock)。
