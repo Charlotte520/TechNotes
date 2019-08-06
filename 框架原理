@@ -121,6 +121,7 @@ scan：1.scanapi：业务for(Result r: resultScanner)时，client先判断是否
 
 3.client写rs2 hlog，memstore。delete是mark delete，compact实际删除。同一行数据放在同一region server，通过行锁保证行操作原子。checkAndPut/Delete/Increment/append内部也是通过行锁，加锁->get->比较->相等则put/del，否则返回失败。put/del时，先获取行锁，再获取write number，用于mvcc；写hlog，再写memstore，异步线程将hlog刷到hdfs。hlog可sync写，同步写入文件系统，不落盘（默认）。或async写，落盘。写入本地log即成功。释放行锁，共享锁。hlog结构：rowkey：region_seqid_writetime_tablename_clusterid，value：#kvs+list<kv of same row>
 
+checkandput：基于countdownlatch(1)。每个request一个线程，put前先获取锁。RowLockContext：row，CDL，thread，lockcount。每个region都有LockedRows，记录rowkey和RowLockContext的map。若row被其他thread使用，rowlockcontext.latch.await(timout)
 
 flush & compact：hbase-default.xml  由master触发，rs执行。
 
