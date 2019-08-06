@@ -1,0 +1,33 @@
+服务鉴权：事先设置app对接口的访问权限规则。某app请求某接口时，根据请求的url匹配规则，匹配成功才可访问。
+1）精确匹配：hashmap存储 appid->可访问的url set。url set可按string排序，二分查找url是否在可访问set。
+2）前缀匹配：trie存url set，每个节点为/分割后的子目录。子节点再组织成有序数组，可二分查找选子节点。
+3）模糊匹配：回溯时间复杂度高。将带*和不带*的规则分开处理。不带*的组织成trie+有序数组，带*的存在数组中，回溯。
+
+限流：
+粒度：每个接口限制不同访问频率；所有接口限制总频率；某app对某接口的频率等。
+1）固定时间窗口：选时间起点，每当有request，counter+1。若当前time window内，counter>threshold，拒绝后续req。进入下一window，counter=0。缺：无法应对两窗口临界时间内的突发流量。即window1的后10ms>T, window2的前5ms>T，限制不住。
+2）滑动时间窗口：任意时间窗口都不能超限，流量曲线更平滑。维护大小为T+1的循环队列，记录window内的req。若新req到达，删除队列内时间与当前时间超过1s的请求。查看是否有空闲位置，若有插入tail，否则拒绝。缺：只能在选定时间粒度上限流，更细粒度不能限制。
+3）令牌桶，漏桶
+
+
+shorturl：
+原网址转short url；短地址服务t.cn，redirect到原地址。mysql：short -> origin.
+murmurhash：计算速度快，冲突小，不考虑反向解密难度。32/128bits，选32。再10进制转62进制（0-9，a-z，A-Z），缩短长度。
+hash冲突：先查db看是否已有相同short url，再检查origin是否相同。若相同直接返回，若不同，则在origin拼接特殊字符，rehash。若再冲突，再更换特殊字符。将最终short，origin和拼接都存db。优化：1）先检查再插入，需要两次db访问。对short列建unique index，一次db访问。2）对short构建bloomfilter，10亿数据125MB内存，先看bf中是否存在short，减少db访问。
+自增id：相同origin可能有不同short：不处理。或先查找origin是否在db中，要对origin列建索引。id generator：1）一个id gen+前端多个发号器，批量给发号器一批id。2）多个id gen，每个生成不同尾号的id保证不冲突。
+
+字符串匹配：
+1.BF：brute force，比较n-m+1个主串子串和模式串是否相同。主串&模式串都不太长。O(m*n)
+2.RK：用hash优化串比较。字符集大小为K，用k进制计算hash，再转为10进制。如hash(abc)=a*26^2+b*26+c，算下一个子串的hash时可利用之前的值，如hash(bcd)=(hash(abc)-a*26^2)*26+d。只要不超过int/long范围，则没有冲突。若子串和模式串hash值相同，则比较内容，保证无冲突。减少hash冲突：用1,3,5。。素数。二维矩阵匹配。O(n)
+2.KP: 字符集范围不大，模式串不长，否则hash冲突。O(n)
+3.BM: 模式串不长，预处理较重O(m*m)，匹配O(n)。IDE编辑器查找。
+4.KMP：O(m+n)。next数组需要O(n)空间。
+5.多pattern匹配：trie，适合多pattern公共prefix较多的匹配，O(nk)。或根据prefix查找，如search自动补全。AC自动机：大量文本，O(n)
+
+图：
+邻接表：链表用skiplist、红黑树、hash优化查找。关注、被关注：邻接+逆邻接表。数据库：两列都建index。根据userid分片。
+
+Redis：
+key：string。value：list，集合，有序集合，字典。当元素小(64B)且个数少(512)时，用ziplist：可放不同类型大小的连续内存，count | len | xxx| len| xxx|... 数组只能放相同类型。小块连续内存容易申请，可利用cpu cache。其他情况：list为双向循环链表（listnode表示数据节点，list包括head，tail指针，len）。字典：murmurhash（快，随机性好）+链表，可渐进式动态扩/缩容，分批迁移数据。集合：元素不重复。小且少用有序数组，其他用hash。sortedset：ziplist或skiplist。
+持久化：1)清除原存储结构，只持久化数据，还原时重新组织数据（慢）。redis。如hash数据存disk，读时要重新计算hash。二叉查找树：存先序+中序遍历序列；存层序+层号；补成完全二叉树，再用数组存。2)保留原存储格式。保存hash数组大小，数据对应的slot等。
+
