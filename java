@@ -27,8 +27,10 @@ phantom：不能通过他访问对象。对象被finalize后，可用于监控�
 
 5.String、StringBuffer、StringBuilder
 StringBuffer：通过synchronized保证线程安全，可修改。StringBuilder非线程安全。二者底层都是byte[]，初始16，若可以预估大小，可先设好，避免频繁扩容。继承AbstractStringBuilder，操作都相同。
-String.intern(str)：将str缓存，若已有直接返回。jdk6中缓存到perm gen，容易oom。jdk7放入heap,且perm gen用metaspace替代，更大。也可用-XX：+UseStringDeduplication，配合G1 GC，由jvm提供去重。
-String: char[]，char占2B，jdk9用byte[]+编码说明，减少空间。
+String.intern(str)：将str缓存，若常量池已有则直接使用。jdk6中缓存到perm gen，容易oom。jdk7放入heap,且perm gen用metaspace替代，更大。也可用-XX：+UseStringDeduplication，配合G1 GC，由jvm提供去重。
+String:不可变 final private char[]，char占2B，jdk9用byte[]+coder编码说明（0表示单字节，1表示UTF-16），减少空间。
+String s="abc"：jvm检查常量池是否存在，若有直接返回其引用，否则在常量池中创建，减少重复创建。String s = new String("abc")：编译器将abc放入常量结构，加载类时在常量池创建，new时调用String的构造函数在堆中创建对象，并引用常量池中的abc。new String(s)：在堆中创建。String s1=new String("abc").intern()，s2=new String("abc").intern()，s1/s2的char[]都引用常量池字符串，堆中创建的对象会被gc。但常量池存储的数据越多，遍历越慢。
+s.split()：参数长度为1时不用正则。regexp匹配，强大但不稳定，若有回溯会使cpu load高。用indexOf()分割。
 
 6.动态代理
 反射：直接操作类、对象，如obj.getClass()，获取类声明的属性、方法，运行时修改类定义。java.lang.reflect包中：Class、Field、Method、Constructor等，可用于操作类/对象。AccessibleObject.setAccessible(bool)，用于开发、测试、依赖注入框架。框架为保证通用性，要根据配置文件加载不同对象，调用不同方法。如ORmapping框架，为obj自动生成get、set，进行加载、持久化数据等。也可用于绕过api访问控制，如nio.DirectBuffer。
@@ -84,6 +86,11 @@ primitive：不能用于泛型。泛型在编译时将类型转为对应类型�
 vector：基于synchronized的线程安全动态数组，内部数组，扩容增加1倍。AL：非线程安全，扩容增加50%，手动缩容trimToSize()。LL：双向链表，非线程安全。可通过Collectins.synchronizedList(List<T> list)将其转为基于sync的线程安全容器。
 默认排序算法：Arrays.sort()，Collections.sort()将collection转为Object[],再用Arrays.sort()。对primitive数据，用dual-pivot quickSort。对象类型，用TimSort，归并+二分插入结合。parallelSort：基于fork-join，利用多core cpu。jdk9:List.of()不可变，不能扩容，更紧凑。
 
+Collection.Stream(),parallelStream()：可通过lamda表达式遍历集合，代码简洁，进行aggregate、bulk data operation。大数据量多cpu并行效率高，否则用传统方式。
+操作：中间操作（只记录操作，返回stream，不计算），终结操作（计算）。中间操作/懒操作：stateless（元素处理不受之前元素影响，如filter，map，peek，unordered），stateful（要得到所有元素才能继续，如distinct，sorted，limit，skip）。终结操作：short circuit（遇到某些符合条件的元素即可得到结果，anyMatch，allMatch，findFirst，findAny，nonMatch），unshort circuit（全部处理完才能得到结果，forEach，toArray，reduce，collect，max，min，count）。 数据源+懒操作+终结操作 构成pipeline。
+stream包：接口类，BaseStream, Stream。BaseStream定义流的基本接口：spliterator，isParallel。Stream定义流操作，map、filter等。ReferencePipeline：抽象类，内部类Head，StatelessOp，StatefulOp，实现Stream接口方法。Sink：接口，定义Stream操作间的协议，begin(),end,cancellationRequested,accept。ReferencePipeline将整个stream操作组装成调用链，链上各stream的上下关系通过sink接口实现。
+Head类：定义数据源操作，list.stream()时，初次加载Head对象。再加载Stateful/StateOp，由AbstractPipeline生成stage链表。调用终结操作时，生成最终stage，触发之前的中间操作，从最后一个stage开始递归产生sink链。每个stage包括数据来源+操作+回调函数。
+
 9.hashtable, hashmap, treemap
 hashmap性能依赖于hashcode有效性：若equals相等，hashcode一定相等。重写hashcode，也要重写equals。内部Node<K,V>[] table + 链表。若链表长度>8，变成tree。构造函数只设置了capacity,loadFactor等初始值，没有对table初始化。在put()时，lazy load，若table为null，先resize()初始化table。放入新kv时，将hashcode高位移到低位异或，再&(n-1),忽略table容量以上的高位。若元素个数size>threshold，通过resize()扩容。threshold=loadFactor*capacity，默认为0.75*16。newThreshold=old<<1成倍增长。treefiBin()：当bin中节点数量（一边putval一边统计）>8时，若size<64，则resize扩容table。若size>64，进行树化改造。 可通过Collections.synchronizedMap()使其线程安全。
 LinkedHashMap：kv维护双向链表，根据插入顺序遍历。也可根据访问顺序，实现LRU cache。
@@ -92,10 +99,17 @@ LinkedHashMap：kv维护双向链表，根据插入顺序遍历。也可根据�
 ConcurrentHashmap：分段锁 + volatile value + CAS。Segment[]继承ReentrantLock，数量与entry一致，不再使用。初始化table，用volatile sizeCtl互斥，若发现有线程正在修改，Thread.yield()自旋等待，否则用cas修改sizeCtl，创建table。put(k,v)时，若entry为null，cas放入，否则用synchronized加锁，遍历链表数据，替换或增加新节点到链表中，若链表长度>8，变红黑树。size()，用LongAdd分别算不同entry元素个数，再求和。
 
 11.io
+5 io模型：阻塞（创建连接时需要线程处理，若数据未就绪，线程阻塞等待，在accept，connect，read/write都会阻塞），非阻塞（每步都不阻塞，线程轮询检查状态，cpu load高），io复用（select，poll，顺序扫描fd数组是否就绪，fd数量不能过大。epoll，事件驱动，fd放入红黑树，增删效率高），信号驱动（kernel为observer，信号回调为notification，发起io请求时给socket注册回调，不阻塞，内核数据就绪时生成sigio信号，通过回调通知进程操作，用于udp），异步（内核完成等待数据就绪、复制到用户空间后才通知进程，linux未实现）。 java nio用io复用selector实现非阻塞io，封装select/poll/epoll。
 java.io：File抽象、Input/OutputStream（读写字节）、Reader/Writer(读写字符，加入字符编解码功能)、BufferedOutputStream（带缓冲区，flush时批处理）等。基于stream模型，同步、阻塞。java.net:Socket,ServerSocket,HttpURLConnection。
-nio：channel（文件描述符，可通过DMA将数据在网卡和buffer中复制），selector（多路复用，检测注册其上的多个channel是否就绪，实现单线程对多chennel的管理，基于linux epoll），buffer（数据容器），多路复用、同步非阻塞io。
+nio：channel（文件描述符，可通过DMA将数据在网卡和buffer中复制），selector（多路复用，检测注册其上的多个channel是否就绪，实现单线程对多chennel的管理，基于linux epoll），buffer（数据容器），多路复用、同步非阻塞io。4个监听事件：OP_ACCEPT,OP_CONNECT,OP_READ,OP_WRITE。先创建channel，监听socket连接。再创建多路复用器selector，并将channel注册到selector。通过selector轮询channel，发现某channel就绪，返回监听事件，程序匹配到事件，进行io操作。
 aio：基于事件、回调的异步io。
 file copy：内核态将数据从磁盘dma读到内核缓存，再切换到用户态，cpu将数据从内核缓存读取到用户缓存。nio transferTo：不需用户态参与，0copy。Files.copy()：用native方法实现用户态拷贝，不经过内核态。
+
+线程模型优化：事件驱动
+同步io：Reactor模型。io事件注册到多路复用器，触发io事件时，多路复用器将其分发到处理器。包括acceptor：接收连接请求；reactor：将连接注册到reactor，由selector监听并dispatch；handlers。
+单线程reactor模型：所有io操作只有1线程。无法上万连接。
+多线程reactor：单acceptor线程，worker线程池处理请求。
+主从reactor：acceptor主线程监听连接事件，从线程监听io事件，worker线程池。主流。
 
 12.synchronized
 提供三种不同monitor实现：biased lock、轻量级锁、重量级锁。jvm检测到不同竞争状况，自动切换到对应锁实现，升级/降级。若无竞争，用biased，用cas在obj header中mark word设置threadId，表示该obj现在偏向当前线程。若有线程试图锁定已被偏斜过的obj，jvm撤销biased lock，切换到轻量锁。通过cas mark word试图获取锁，若成功则使用轻量锁，否则升级到重量锁。jvm进入safe point时，检查是否有闲置的monitor，降级。
