@@ -20,9 +20,10 @@ hash冲突：先查db看是否已有相同short url，再检查origin是否相�
 1.BF：brute force，比较n-m+1个主串子串和模式串是否相同。主串&模式串都不太长。O(m*n)
 2.RK：用hash优化串比较。字符集大小为K，用k进制计算hash，再转为10进制。如hash(abc)=a*26^2+b*26+c，算下一个子串的hash时可利用之前的值，如hash(bcd)=(hash(abc)-a*26^2)*26+d。只要不超过int/long范围，则没有冲突。若子串和模式串hash值相同，则比较内容，保证无冲突。减少hash冲突：用1,3,5。。素数。二维矩阵匹配。O(n)
 2.KP: 字符集范围不大，模式串不长，否则hash冲突。O(n)
-3.BM: 模式串不长，预处理较重O(m*m)，匹配O(n)。IDE编辑器查找。
-4.KMP：O(m+n)。next数组需要O(n)空间。
+3.BM: 模式串不长，预处理较重O(m*m)，匹配O(n)。IDE编辑器查找。遇到不匹配字符时，pattern向后多滑动几位。bad char rule。good suffix shift。最好情况o(n/m)
+4.KMP：O(m+n)。next数组需要O(n)空间。坏字符。好前缀。
 5.多pattern匹配：trie，适合多pattern公共prefix较多的匹配，O(nk)。或根据prefix查找，如search自动补全。AC自动机：大量文本，O(n)
+6.trie: 前缀匹配。搜索关键词提示（trie+根据query log分片求topK）；输入法、ide、url自动补全。前缀重复不多，字符集过大时，耗内存。节点内存优化：有序数组（二分查找某char匹配的子节点）；跳表；hash；红黑树。缩点优化：只有一个子节点的节点，且不是endingChar，将子节点与节点合并。
 
 图：
 邻接表：链表用skiplist、红黑树、hash优化查找。关注、被关注：邻接+逆邻接表。数据库：两列都建index。根据userid分片。
@@ -31,3 +32,37 @@ Redis：
 key：string。value：list，集合，有序集合，字典。当元素小(64B)且个数少(512)时，用ziplist：可放不同类型大小的连续内存，count | len | xxx| len| xxx|... 数组只能放相同类型。小块连续内存容易申请，可利用cpu cache。其他情况：list为双向循环链表（listnode表示数据节点，list包括head，tail指针，len）。字典：murmurhash（快，随机性好）+链表，可渐进式动态扩/缩容，分批迁移数据。集合：元素不重复。小且少用有序数组，其他用hash。sortedset：ziplist或skiplist。
 持久化：1)清除原存储结构，只持久化数据，还原时重新组织数据（慢）。redis。如hash数据存disk，读时要重新计算hash。二叉查找树：存先序+中序遍历序列；存层序+层号；补成完全二叉树，再用数组存。2)保留原存储格式。保存hash数组大小，数据对应的slot等。
 
+hash:
+word拼写错误检查：20w单词，平均长度10，每个char 1B，每个单词10B，共2MB。计算每个单词的hash，O(1)判断。比字符串匹配效率高。
+hash碰撞攻击：构造大量数据，使其hash后到同一slot，查询退化为O(n)，消耗大量cpu、线程资源。导致系统无法响应其他请求，dos。
+工业级hash：hash函数设计要随机且均匀，计算快，根据数据特点、长度、分布定制；扩容对性能影响小，不要一次数据搬移，先申请新数组，插入数据时插入新数组，并从旧数据搬移一个。查找时查两个数组；load factor；冲突解决方法：开放寻址，连续存储可利用cpu缓存，易序列化，但查找、删除麻烦，冲突代价更高，故load factor要小，浪费内存。适合数据量小、load factor小的场景，如ThreadLocalMap。链表法：可通过skip list、红黑树优化，查找o(logn)，避免碰撞攻击。适合大对象、大数据量，灵活。
+HashMap：初始大小16,若已知大小可直接设置，避免扩容。LF：0.75，扩容*2。链表优化：>8红黑树，短时要维护树开销。hash函数：hashcode为32bit int，高16b ^低16b，结合高低位特性。&(capacity-1)。当容量为2^n时，a%b=a&(b-1)，加速计算。
+hash+双向链表：链表查找o(n)，结合hash可o(1)。双向链表是为了方便删除。
+LinkedHashMap/LRU：按访问顺序遍历，put()/get()时会将kv放入链表首。
+redis sortedset：key、score。操作：插入；按key查找、删除；按score区间查找；按score排序。按score组织成skip list，按key构建map，使按key查找、删除o(1)，按score查找o(logn)。如何查rank？
+geohash：地理位置索引。地图分为4个象限，分别为左下00，左上01，右下10，右上11。将地图不断切分为更小的4象限，target落在哪个区间就加上相应id。=》位置相近的点具有相同前缀。精度由划分次数决定。
+
+不能从hash值反向推导出原数据。输入数据很小修改，得到大不同hash。冲突概率小。执行效率高。
+应用：
+1.加密：md5（128bit），sha。要求不能反向推导，冲突小。  字典攻击：常用密码字典，计算hash，跟脱库对密文对比。=》salt+密码，计算hash。
+2.唯一标识：搜索图片，从图片的二进制串开头、中间、最后分别取100B，对300B计算md5。
+3.数据校验：BT分块下载文件，对100个文件块分别取hash，放入种子。下载的文件块与种子中的hash对比，若不一致，重新下载。
+4.散列函数：关注hash值是否均匀散列在各个slot，计算速度。对冲突要求低，可开放寻址/拉链法。不关心反向解密。
+5.负载均衡：session sticky，hash(ip/sessionid)%#servers
+6.数据分片：n台机器并行处理数据，hash(key)%n，再将相同key的分配到同一机器处理。如：图片搜索，n台机器分别处理部分图片，遍历所有图片，计算内容hash%n，分配到对应机器。新照片同样计算hash%n，到对应机器上查找。
+7.分布式存储：一致性hash。
+8.crc校验
+9.git commit id：git status根据文件hash判断是否修改。
+
+
+skiplist：二分查找依赖数组的random access，增删慢。动态增删，范围查找，比红黑树简单。需要o(n)索引空间，查找o(logn)
+插入：o(logn)。删除：要删原始链表和索引，用双向链表容易得到pre。index更新：红黑树通过左右旋维持子树平衡，跳表通过随机函数。insert时由随机函数决定插入哪几级索引，如random为k，则加入1~k索引。
+
+
+数组：
+random access：o(1)。插入：o(n)->若顺序无关，将元素x插入k时，将A[k]移动到A[last]，再将x放入A[k], o(1)。删除：o(n) -> 删除时标记，无位置再批删除，减少移动次数。gc mark-compact。
+越界检查：int[]. ArrayList封装细节操作，如数据搬移，可动态扩容，但无法存primitive type。数组适合大小已知，性能要求高，多维数组更直观。
+从0开始编号：a[k]_addr=base+k*type_len。若从1开始，需要k-1，多一次-操作。
+
+链表：
+边界检查：空；1节点；2节点；头尾节点。 哨兵：简化逻辑。
