@@ -99,3 +99,43 @@ Producer ACK：0，只要prod发送成功就认为成功，即使没有在leader
 
 4.实时计算链路
 slave宕机，master感知，将计算任务重新分配到其他节点。master宕机，基于active-standby，自动切换主备。
+
+《消息队列高手》
+2.选型
+rabbitmq：producer和queue之间有exchange，可灵活路由。对消息堆积支持不好；性能不佳，十几万/s；erlang。
+rocketmq：java，性能、稳定性、可靠性好。ms级延迟，适合在线业务；几十万/s
+kafka：java & scala；生态兼容性好；几十万/s；批量、异步处理；同步时延高，不适合在线业务。海量数据，收集log、监控、前端埋点。
+pulsar：存储与计算分离
+
+3.topic、queue
+
+
+4.分布式事务：2pc，tcc，消息事务
+创建订单，清理购物车：先开启mq事务，发半消息给mq；执行本地事务，创建订单；再提交/回滚mq事务。=》若最后一步失败，kafka抛异常，由业务重试或删除订单补偿。rocketmq：定期去producer反查消息事务对应的本地事务的状态，再决定对消息commit/rollback。本地事务需要提供反查api。
+acid：a：本地事务和发消息是分离的操作。c：异步操作，只能最终一致。i：本地事务提交后，其他事务消息已经可见。d：若半消息存在内存，不满足。
+
+5.不丢消息
+检测丢失：1)分布式链路追踪：在服务调用网络间埋点，得到一次request处理的各服务调用链。google dapper  2)producer通过拦截器给msg带连续递增id，consumer检查id是否连续。kafka只能保证partition有序，各producer分别生成连续递增msg，且带producer id。consumer与partition一一对应检测。
+生产阶段：发送时收到ack才能保证可靠，否则重试，再抛异常。同步：RecordMetaData d = producer.send(msg).get()，收到ack时get()才返回。异步：producer.send(msg,(d,exception)->{xxx}) 回调中检查发送结果。
+存储阶段：若单节点broker，要将msg写入磁盘再返回ack。若多节点，至少发2个以上节点再返回ack。
+消费阶段：msg处理完再commit
+
+6.重复消息
+kafka 事务、exactly once是为了配合streaming使用，与MQTT exactly once不同，传统分布式事务也不同。故kafka是MQTT的at least once。不做exactly once：影响性能，易堆积。
+消费端幂等：
+1)利用db唯一性约束（转账流水表：账单id+账户id，金额，对账单id+账户id建立unique index，消费时先插入db，若成功再消费），和任意支持insertIfNotExist操作的存储（如redis setnx）。
+2)为更新数据设置前置条件。checkandput，即msg中带当前值，更新前先看db是否和当前值相等，相等才执行，并更新。或用版本号，更新前检查版本号，更新时version+1.
+3)记录并检查：每个msg一个全局唯一id，消费时检查msg是否被处理过，再更新，设置msg为已消费。要求检查、更新、设置是原子的。可以用事务、锁实现。
+
+7.消息积压
+producer：并发、批量大小。
+consumer：优化消费逻辑；consumer取消息放入内存队列，再多线程处理。会丢消息。批量消费：可批量处理、入库，减少带宽overhead。但需要整体ack，某一消息失败会引起很多重试；多线程批量消费速度为最慢线程。
+若发送突然变快：如抢购、大促。扩容consumer实例数。降级关闭不重要业务。若消费变慢：log consumer error；堆栈，是否死锁或卡在某资源。若收发速度不变，是否consumer反复消费同一消息。
+
+
+
+
+
+
+
+
