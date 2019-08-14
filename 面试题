@@ -1,0 +1,27 @@
+1.MQ
+consumer挂了，消息积压？紧急扩容。先修consumer，恢复消费速度，停掉所有consumer。创建新topic，partition是原来的10倍。写一个转存consumer，将老queue数据直接转发到新queue，再重启10*consumer从新queue消费。消费完积压数据，恢复consumer。
+某个partition不消费？
+设计思路：
+1）伸缩，扩容：broker->topic->partition。扩容时，给topic增加partition，增加机器，数据迁移。
+2)数据落盘：磁盘顺序写。
+3)可用性：多副本，leader->follower，某partition leader挂了，zk重选leader。broker挂了。controller挂了。
+
+2.微服务
+服务治理：自动生成调用链路。服务压力：统计各接口和服务间调用次数、访问延迟。接口粒度：每个接口被调用多少次，95%延迟。源头：一个请求全链路走多少次，latency。=》系统压力，瓶颈，扩容，优化。服务分层，避免循环依赖。调用链监控、报警。服务鉴权。可用性监控，接口成功率。
+降级：a调用b，重试几次失败后直接返回降级逻辑。
+失败重试：超时重试：
+rpc框架设计：服务注册：zk。服务发现：client，注册zk监听器。rpc请求：动态代理，thrift用反射加载client代理。该代理建立socket连接，io通信。负载均衡：client缓存可用server列表，轮询，hash。发送数据协议：binary，json，xml。网络协议：nio。服务端：多路复用的reactor，nio，监听port，启动worker线程池处理。
+高并发系统设计：系统拆分。缓存。mq。分库分表。读写分离。
+
+3.mysql
+主从复制：从库io线程sync主库binlog，写入本地relay log，执行。主库数据丢失：半同步：主库写binlog，且从库写relay log后返回主库ack，主库再返回用户suc。延迟 几十ms：并行复制，从库开多线程并行执行relay log不同库的log。高峰期先插入立即读，可能读不到，要么强制读主库，要么延迟读。
+分库分表：单表<百万。proxy：延迟，miproxy。client：sharding jdbc，不用部署，不用代理转发。耦合度高。按range，如time range，易产生热点，扩容方便。按key hash，常用，扩容要重新计算hash迁数据。
+不停机切换到分库分表：1)半夜停流量，导入工具copy，修改db连接配置，重启。2)双写迁移：改业务，双写两库。导入工具copy，写时判断updatetime，若新库没有该数据，或老库时间新，才写入。校验新老库的每条记录，重写。循环直到全部一致。重启只写新库。3)一开始就32库，每库32表。单库并发写1kqps，32库可3.2w写并发。每表500w数据，2014表可50亿数据。
+id：自增id，不同起始，相同步长。uuid，本地时间生成，但长，string，无序，做key性能差（不能顺序append，b+随机写）。snowflake。
+
+4.redis
+比memcache：支持更多数据结构，丰富的数据操作。可cluster。但单线程只用到单核。
+线程模型：file event handler。io多路复用监听多socket。效率高：纯内存；非阻塞io；c；无上下文切换。
+数据类型：string：set key v。 map：hset key k v，根据相同kv组织成map。list：有序列表。lpush list 1 2 3, lpop list。lrange list 0 5：翻页查闭区间。可用来做粉丝列表。set：无序集合，自动去重。sadd set 1; smembers; sismember set 3; srem set 1; sinter a b;求交并集。sortedset：排序，去重，根据score排序。zadd list 85 zhangsan; zadd list 90 lisi; zrank list lisi，获取排名。
+过期：定期+惰性删除。每隔100ms随机选设置了expire的key，若已过期则删除。get时检查expire，若过期则删除。+ 内存淘汰：allkeys-lru。
+高并发：主从，单主写入几万qps，多从10w读qps。大容量：集群。高可用：主从+哨兵。
