@@ -1,3 +1,6 @@
+g1:
+分为eden、survivor、old、humongous 4种region。每个region一个remeber set，记录外部指向本region的所有引用。card：固定大小，每个region分为多个card。优先回收几乎全是garbage的区域，建立stop模型决定每次gc回收哪些region，满足pause time。
+
 《java核心技术36讲》
 1.平台理解：
 语言特性，如泛型、lambda。基础类库，如collection、io/nio、网络、并发、安全。类加载机制。GC原理。JDK工具。
