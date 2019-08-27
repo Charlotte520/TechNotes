@@ -1,0 +1,27 @@
+bitmap。
+count sort：数据范围不大。
+hash分散到不同文件，分别计算再合并。
+topk：hash分流；分别小顶堆求局部topk；merge sort求全局topk。
+cohash：减少数据迁移。
+bloomfilter：
+
+1.a、b两文件，各存放50亿url，每个64B。内存4G，求a、b共同url？
+a、b文件每个640GB。求hash(url)%1k，分散到不同文件，每个文件320MB。若a、b中相同url会落入同一桶内，加载到set中比较。
+bloomfilter：建立bitmap，先将a中url映射到k bit，再将b中url映射到k bit，若已经存在，说明重复，输出到文件。有可能将不相同url认为相同，再将url内容比较一下。
+2.10个文件，每个1G，每行存放query，可能重复。按query频度排序。
+先对10个文件中query做hash，使同一query放入同一文件。每个桶内用hashmap计算word count，再排序。再对10个桶merge sort。
+3.2.5亿整数中找不重复的，内存不足。
+bloomfilter：空间效率高。   bitmap：但需要2bit表示一个整数的状态，00表示出现0次，01表示出现1次，10表示出现多次。返回01的整数。
+4.1kw string，去掉重复，保留不重复的。
+先hash到1k个小文件，再对每个小文件用hashset去重，再合并。  trie：若string长度不长，字符集不大，查询效率高。
+5.10亿ipv4地址排序，每个ip出现一次。
+bitmap
+
+bloomfilter：判断元素是否在一个集合中。空间小，可常驻内存。
+字处理软件，检查单词是否拼写正确：trie，o(len)。bf：o(1)
+爬虫，判断某网址是否被访问过。
+垃圾邮件过滤。对可能误判的邮件用白名单再筛选。
+bigtable：减少不存在行/列在磁盘上的查询。
+p2p网络查找资源，将网络通路保存bf，命中时选择该通路。 广播时，检查某ip是否已发包。检测广播包环路，每个节点将自己ip加入bf。
+缺点：无法删除元素=》可用counting bf，用counter[]记录所代表的元素个数。但要考虑counter所占bit个数，太小可能溢出。
+压缩：元素全部插入后，得到真实的空间使用率，用公式计算新bf大小，重新构造。保持误判率不变，且内存更小。
