@@ -1,0 +1,96 @@
+1.spell checker
+输入word，可能拼错，返回最接近的list<word>。
+1)先判断是否拼错：对正确词典构建hash<correct,freq>（bloomfilter，trie树），快速查找输入word是否在词典中。
+2)查找接近word：对error词生成编辑距离==2的可能词（只替换字符，不增删），查找是否出现在map中，并根据距离和freq排序。若有m个字符，word长度为n，可生成C(n,2)*(m-1)^2种可能词。可根据键盘布局优先替换接近的字符。或stemming提取词干，返回stemming的list。统计经常拼错的词对应的正确词，组织成hash<error,list<correct>>。如用户先输入xxx，删除，再输入yyy，记录<xxx,yyy>
+
+2.stemming
+根据某种规则重写单词，可扩展query，减少存储。
+规则：改、删后缀。如cars->car,wolves->wolf。根据后缀表找到suffix的(start,end)位置。再根据转换表，将特定suffix转为其他形式。将规则建立finite state machine。还要考虑特殊情况：chinese->china，组织成map直接转换。
+
+3.相似文章查找
+将文章看为string，若两文章有长度为k的公共子串，认为相似。
+文章abcdefg，若k=3，对所有长度为k的substring求hash，即hash(abc),hash(bcd),hash(cde),hash(def),hash(efg),共有len-k+1种。记录到map中，<substr,offset>。对文章2,同样求所有substring的hash，看是否和map有冲突，若有则相似。
+要去掉在所有文章中都出现的高频词。如<header>
+
+4.根据用户属性，将相同的配对
+倒排：<属性,userids>：若属性值很少，可放入bitmap，再hash。tc：o(mn)，m个属性，n个user。若属性很多，每个用户只有少量属性，可先对attr排序，再拼接为string，再计算hash，再存入map。tc：o(mn)，n个user，m为每个用户的平均attr个数。
+
+5.检测侵权视频
+将所有视频都转为相同格式、分辨率、压缩度，再计算signature。每一帧分成几个region，每个region求RGB 3bit，再拼接所有region。
+
+6.search engine
+posting list：有序列表，不存docid，存当前id和前一id的增量。  将top docid常驻内存，其余在磁盘。多list合并时，先合并短的。
+
+7.short url
+提高web server到db的响应速度：将short->long存储在cache。
+提高web server到browser的响应速度：不同地区部署web server+cache，dns解析将不同地区用户分配到最近server，所有地区共享db。 或按地区id作为short第一位，按地区分片。
+存储分片：表(short, long)，rk：short，snd index：long。按short url分片。对long url，先hash(long)%N得到机器，在该机器上通过自增id生成short url，并将sharding key作为short的第一位。 对short url，根据第一位得到sharding key，通过cohash找到对应的机器，在该机器上查找short。 增/减机器，hash(hostname/ip)得到负责的sharding key范围，将相邻机器的url复制过来。
+
+8.query auto complete  lc 642
+输入句子，以#结束。返回与已输入句子部分前缀匹配的top3历史热门句子。
+初始化：根据String[] sentences, int[] count。构建trie
+class AutoCompleteSystem {
+        TrieNode root;
+        TrieNode curNode;//初始化为root，随着输入增加向下查找，当输入#时，重置为root
+        String curStn;//当前输入前缀
+        PriorityQueue<StringCount> q = new PriorityQueue<>();
+
+        AutoCompleteSystem(String[] sentences, int[] times){
+            //初始化构建trie
+            TrieNode root = new TrieNode();
+            for(int i = 0;i<sentences.length;i++){
+                insert(sentences[i],times[i]);
+            }
+            curNode=root;
+            curStn="";
+        }
+
+        void insert(String stn, int count){
+            TrieNode cur = root;
+            for(char c: stn.toCharArray()){
+                if(!cur.child.containsKey(c)){
+                    cur.child.put(c, new TrieNode());
+                }
+                cur=cur.child.get(c);
+            }
+            cur.str=stn;
+            cur.cnt+=count;
+        }
+
+        List<String> input(char c) {//先检查是否为#，若是，加入trie，更新curNode、curStn，返回null。若不是，检查curNode.child是否有含c的节点，若没有curNode=null，返回null。否则，curNode更新为子节点，dfs返回top 3子节点，用priorityqueue保存
+            List<String> res = new ArrayList<>();
+            if(c == '#') {
+                insert(curStn,1);
+                curNode=root;
+                curStn="";
+                return res;
+            }
+
+            curStn+=c;
+            if(curNode!=null&&curNode.child.containsKey(c)){
+                curNode = curNode.child.get(c);
+            } else {
+                curNode=null;
+                return res;
+            }
+
+            dfs(curNode);//dfs找到当前匹配的所有子节点
+            
+            int n = 3;
+            while (n>=0&&!q.isEmpty()){
+                res.add(q.poll().str);
+                n--;
+            }
+            while (!q.isEmpty()) q.poll();//每次查找完要清空
+            return res;
+        }
+
+        void dfs(TrieNode cur){
+            if (cur.str!=""){//叶子节点，找到句子结尾
+                q.offer(new StringCount(cur.str,cur.cnt));
+            }
+            for(Map.Entry<Character,TrieNode> entry:cur.child.entrySet()){
+                dfs(entry.getValue());
+            }
+        }
+    }
