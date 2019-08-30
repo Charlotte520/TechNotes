@@ -25,3 +25,21 @@ id：自增id，不同起始，相同步长。uuid，本地时间生成，但长
 数据类型：string：set key v。 map：hset key k v，根据相同kv组织成map。list：有序列表。lpush list 1 2 3, lpop list。lrange list 0 5：翻页查闭区间。可用来做粉丝列表。set：无序集合，自动去重。sadd set 1; smembers; sismember set 3; srem set 1; sinter a b;求交并集。sortedset：排序，去重，根据score排序。zadd list 85 zhangsan; zadd list 90 lisi; zrank list lisi，获取排名。
 过期：定期+惰性删除。每隔100ms随机选设置了expire的key，若已过期则删除。get时检查expire，若过期则删除。+ 内存淘汰：allkeys-lru。
 高并发：主从，单主写入几万qps，多从10w读qps。大容量：集群。高可用：主从+哨兵。
+
+5.LSH
+给定query，找相似query。  推荐系统：冷启动，新用户登录后，根据短期行为推荐。  基于内容的相似图片搜索。
+单个LSH function产生0/1 hash值；对一个vector，用n（1k）个function计算，得到n bit签名。将签名和数据列表存在lsh table。可分布式计算签名。
+
+6.cache
+模式：
+cache aside：先读cache，无则读db，再写入cache。  写先写db，再删cache。
+read/write through：读：cache无，先从db加载到cache，再返回。  写：先删cache，再写db。
+write behind
+
+7.jieba分词
+难点：分词规范，词定义不明确。歧义词切分：组合型，交集型。 未登录词识别：词表、训练语料中没有。
+基于规则：字典、词库。最大正向匹配；逆向最大匹配；最少切分（切出的词最少）；双向最大匹配。  作为初分手段，识别明显特征词为断点，再对分割后的小串机械匹配。
+基于统计：根据已分词文本，用统计ML模型学习分词规律。n-gram、hmm
+jieba：三种分词模式：精确（文本分析）；搜索（精确的基础上，再切分长词，提高召回率）；全（快，不能解决歧义，扫描句子中所有可成词的词语）
+算法：基于前缀词典扫描词图，生成句子中汉字所有可能成词情况构成的DAG。用dp找最大概率路径，找出基于词频的最大切分组合。
+
