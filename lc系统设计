@@ -29,6 +29,32 @@ posting list：有序列表，不存docid，存当前id和前一id的增量。  
 8.query auto complete  lc 642
 输入句子，以#结束。返回与已输入句子部分前缀匹配的top3历史热门句子。
 初始化：根据String[] sentences, int[] count。构建trie
+    class TrieNode{
+        String str;//从root到当前节点表示的句子
+        int cnt;
+        Map<Character,TrieNode> child;//每个节点放一个字符，空格也占一个节点
+
+        TrieNode() {
+            str="";
+            cnt=0;
+            child=new HashMap<>();
+        }
+    }
+
+    class StringCount implements Comparable<StringCount>{
+        String str;
+        int count;
+        StringCount(String s,int c){
+            str=s;
+            count=c;
+        }
+        @Override
+        public int compareTo(StringCount o) {
+            if(this.count>o.count) return this.count-o.count;
+            if(this.count==o.count) return this.str-o.str;
+            return -1;
+        }
+    }
 class AutoCompleteSystem {
         TrieNode root;
         TrieNode curNode;//初始化为root，随着输入增加向下查找，当输入#时，重置为root
@@ -94,3 +120,50 @@ class AutoCompleteSystem {
             }
         }
     }
+
+9.日志系统  lc 635
+https://www.cnblogs.com/grandyang/p/7224525.html
+    class IdToTs {
+        int id;
+        String ts;
+        IdToTs(int id,String ts){
+            this.id=id;
+            this.ts=ts;
+        }
+    }
+    
+    class LogSystem{
+        Map<String, Integer> gra;//支持的日志查询精度，及每个精度对应的应该匹配的位置
+        List<IdToTs> logs = new ArrayList<>();
+        
+        LogSystem(){
+            gra=new HashMap<>();
+            gra.put("Year",4);
+            gra.put("Month",7);
+            gra.put("Day",10);
+            gra.put("Hour",13);
+            gra.put("Minute",16);
+            gra.put("Second",19);
+        }
+        
+        void put(int id,String ts){//增加
+            logs.add(new IdToTs(id,ts));
+        }
+        
+        List<Integer> retrieve(String start, String end, String granularity){//查找时先根据gra确定要匹配的子串范围，再遍历查找所有范围内的logid
+            List<Integer> res=new ArrayList<>();
+            int idx=gra.get(granularity);
+            String s=start.substring(0,idx);
+            String e=end.substring(0,idx);
+            for(IdToTs log: logs){
+                String ts = log.ts.substring(0,idx);
+                if(ts.compareTo(s)>=0&&ts.compareTo(e)<=0) res.add(log.id);
+            }
+            return res;
+        }
+    }
+    
+    
+10. 内存文件系统  lc 588      
+https://www.cnblogs.com/grandyang/p/6944331.html
+map1：key：路径。value：包含的文件和文件夹。  map2：文件路径 ->content
